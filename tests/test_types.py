@@ -1,0 +1,35 @@
+from datetime import datetime, timezone
+
+import pytest
+
+from icloud_archiver.types import CatalogItem, ItemState, RunStatus
+
+
+def test_catalog_item_is_frozen():
+    item = CatalogItem(
+        asset_id="abc123",
+        created_at=datetime(2014, 8, 23, 15, 42, 1, tzinfo=timezone.utc),
+        size_bytes=4_823_942,
+        albums=["Family/Italy 2014", "Highlights"],
+        original_filename="IMG_1234.HEIC",
+        has_live_photo=True,
+        has_edits=False,
+        mime_type="image/heic",
+        icloud_checksum=None,
+    )
+    with pytest.raises(AttributeError):
+        item.asset_id = "different"  # type: ignore[misc]
+
+
+def test_item_state_terminal_set():
+    assert ItemState.DELETED.is_terminal()
+    assert ItemState.SKIPPED.is_terminal()
+    assert ItemState.FAILED_VERIFY.is_terminal()
+    assert not ItemState.PLANNED.is_terminal()
+    assert not ItemState.DOWNLOADING.is_terminal()
+
+
+def test_run_status_values():
+    assert RunStatus.COMPLETED.value == "completed"
+    assert RunStatus.ABORTED.value == "aborted"
+    assert RunStatus.CRASHED.value == "crashed"
