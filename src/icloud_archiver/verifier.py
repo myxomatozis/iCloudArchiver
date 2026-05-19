@@ -42,7 +42,7 @@ def verify_parse(path: Path, *, mime_type: str) -> None:
         try:
             with Image.open(path) as img:
                 img.verify()
-        except (UnidentifiedImageError, OSError) as exc:
+        except (UnidentifiedImageError, OSError, SyntaxError) as exc:
             raise VerifyError(f"image parse failed for {path.name}: {exc}") from exc
         return
     if mime in _VIDEO_MIMES:
