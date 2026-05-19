@@ -12,3 +12,8 @@ build/
 .scratch/
 state.db
 state.db-journal
+
+# Claude Code agent state (auto-generated; never commit)
+CLAUDE.md
+.claude/
+.DS_Store
