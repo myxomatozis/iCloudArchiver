@@ -1,6 +1,9 @@
 """Selection logic — yield items oldest-first until cumulative size ≥ target."""
 
+import sys
 from collections.abc import Iterable, Iterator
+
+from tqdm import tqdm
 
 from icloud_archiver.journal import Journal
 from icloud_archiver.types import CatalogItem
@@ -23,10 +26,27 @@ def select_until(
     if target_bytes <= 0:
         return
     cumulative = 0
-    for item in items:
-        if cumulative >= target_bytes:
-            return
-        if journal.is_terminal(item.asset_id):
-            continue
-        yield item
-        cumulative += item.size_bytes
+    bar = tqdm(
+        total=target_bytes,
+        desc="Scanning",
+        unit="B",
+        unit_scale=True,
+        unit_divisor=1000,
+        file=sys.stderr,
+        dynamic_ncols=True,
+    )
+    try:
+        for item in items:
+            if cumulative >= target_bytes:
+                return
+            if journal.is_terminal(item.asset_id):
+                continue
+            yield item
+            cumulative += item.size_bytes
+            bar.update(item.size_bytes)
+            bar.set_postfix(
+                date=str(item.created_at.date()),
+                file=item.original_filename[-20:],
+            )
+    finally:
+        bar.close()

@@ -29,18 +29,27 @@ def render_plan_markdown(rows: list[PlanRow], *, target_bytes: int, archive_root
     oldest = min(r.created_at for r in rows)
     newest = max(r.created_at for r in rows)
     albums = sorted({a for r in rows for a in r.albums})
+    no_album_count = sum(1 for r in rows if not r.albums)
     lines = [
         "# iCloud Archiver — Plan",
         "",
         f"- **{len(rows)} items**, total {_human(total)}",
         f"- Target: {_human(target_bytes)}",
-        f"- Date range: {oldest.date().isoformat()} → {newest.date().isoformat()}",
+        f"- Date range: {oldest.date().isoformat()} \u2192 {newest.date().isoformat()}",
         f"- Archive root: `{archive_root}`",
         f"- Projected free-space needed (x1.2): {_human(int(total * 1.2))}",
         "",
         "## Albums touched",
         "",
         *(f"- {a}" for a in albums),
+        *(
+            [
+                f"- _(+ {no_album_count} photo{'s' if no_album_count != 1 else ''} not in "
+                "any album — will be organised into `YYYY/MM/DD/` date folders)_",
+            ]
+            if no_album_count
+            else []
+        ),
         "",
     ]
     return "\n".join(lines)

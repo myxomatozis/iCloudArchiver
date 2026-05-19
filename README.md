@@ -55,15 +55,24 @@ in the macOS Keychain.
 ## Typical run
 
 ```bash
-# See what would happen
+# See what would happen (also writes a machine-readable plan JSON)
 uv run icloud-archiver plan --target-freed 1TB
 
-# Actually do it
+# Option A — scan iCloud again and run immediately
 uv run icloud-archiver run --target-freed 1TB
+
+# Option B — reuse the plan from above to skip re-scanning iCloud
+uv run icloud-archiver run --from-plan ~/.icloud-archiver/plans/<timestamp>-plan.json
 
 # After spot-checking the archive, free the space
 uv run icloud-archiver empty-trash
 ```
+
+`--from-plan` is useful when the library scan takes a long time, or when you
+want to review the plan markdown before committing to the same item set.
+The JSON file is written next to the markdown report that `plan` already
+produces. Any items already completed by the time `run` starts are silently
+skipped (the journal filters them out).
 
 ## Status & resume
 

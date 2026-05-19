@@ -34,6 +34,35 @@ def test_render_plan_markdown_summarizes_rows() -> None:
     assert "Family" in md
     assert "Highlights" in md
     assert "/Volumes/T7/iCloud-Archive" in md
+    # All rows have albums, so the no-album note must NOT appear
+    assert "not in any album" not in md
+
+
+def test_render_plan_markdown_notes_photos_without_album() -> None:
+    rows = [
+        PlanRow(
+            asset_id="a",
+            created_at=datetime(2020, 6, 1, tzinfo=UTC),
+            size_bytes=1_000_000_000,
+            albums=["Holidays"],
+        ),
+        PlanRow(
+            asset_id="b",
+            created_at=datetime(2020, 6, 2, tzinfo=UTC),
+            size_bytes=1_000_000_000,
+            albums=[],  # no album — will fall back to date folder
+        ),
+        PlanRow(
+            asset_id="c",
+            created_at=datetime(2020, 6, 3, tzinfo=UTC),
+            size_bytes=1_000_000_000,
+            albums=[],
+        ),
+    ]
+    md = render_plan_markdown(rows, target_bytes=3_000_000_000, archive_root="/arc")
+    assert "Holidays" in md
+    assert "2 photos not in any album" in md
+    assert "YYYY/MM/DD" in md
 
 
 def test_render_run_summary_includes_failure_counts() -> None:

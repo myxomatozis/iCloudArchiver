@@ -29,6 +29,10 @@ def test_needs_reformat_false_for_apfs_and_hfs() -> None:
 
 
 def test_list_external_drives_filters_system(monkeypatch: pytest.MonkeyPatch) -> None:
+    # disk0 = internal system disk (partition at /  → filtered)
+    # disk4 = traditional (non-APFS) external with a Partitions entry
+    # disk5 = APFS container whose volumes live under APFSVolumes (the common
+    #          modern case that was previously missed)
     plist = b"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -57,6 +61,20 @@ def test_list_external_drives_filters_system(monkeypatch: pytest.MonkeyPatch) ->
         </dict>
       </array>
     </dict>
+    <dict>
+      <key>DeviceIdentifier</key><string>disk5</string>
+      <key>Partitions</key>
+      <array/>
+      <key>APFSVolumes</key>
+      <array>
+        <dict>
+          <key>DeviceIdentifier</key><string>disk5s1</string>
+          <key>VolumeName</key><string>MyAPFSDrive</string>
+          <key>MountPoint</key><string>/Volumes/MyAPFSDrive</string>
+          <key>OSInternal</key><false/>
+        </dict>
+      </array>
+    </dict>
   </array>
 </dict>
 </plist>"""
@@ -78,10 +96,11 @@ def test_list_external_drives_filters_system(monkeypatch: pytest.MonkeyPatch) ->
     )
 
     drives = list_external_drives()
-    assert [d.volume_name for d in drives] == ["Samsung T7"]
+    assert [d.volume_name for d in drives] == ["Samsung T7", "MyAPFSDrive"]
     assert drives[0].mount_point == Path("/Volumes/T7")
-    assert drives[0].fs == "apfs"
-    assert drives[0].is_external
+    assert drives[1].mount_point == Path("/Volumes/MyAPFSDrive")
+    assert all(d.fs == "apfs" for d in drives)
+    assert all(d.is_external for d in drives)
 
 
 def test_pick_drive_interactive_selects_by_index(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -43,12 +43,20 @@ def _volume_stats(mount_point: Path) -> tuple[int, int]:
 
 
 def list_external_drives() -> list[Drive]:
-    """Probe `diskutil list -plist` and return mounted, non-system volumes."""
+    """Probe `diskutil list -plist` and return mounted, non-system volumes.
+
+    Handles both traditional partition-based disks (``Partitions`` key) and
+    APFS containers, whose logical volumes appear under ``APFSVolumes``.
+    """
     res = subprocess.run(["diskutil", "list", "-plist"], capture_output=True, check=True)
     data = plistlib.loads(res.stdout)
     out: list[Drive] = []
     for disk in data.get("AllDisksAndPartitions", []):
-        for part in disk.get("Partitions", []):
+        # APFS containers expose mounted volumes under APFSVolumes, not Partitions.
+        candidates = disk.get("Partitions", []) + disk.get("APFSVolumes", [])
+        for part in candidates:
+            if part.get("OSInternal", False):
+                continue
             mp = part.get("MountPoint")
             if not mp:
                 continue
