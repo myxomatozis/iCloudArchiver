@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from icloud_archiver import orchestrator as orch
 from icloud_archiver.journal import Journal
 from icloud_archiver.orchestrator import InsufficientSpace, run_archival
 from icloud_archiver.types import CatalogItem, ItemState, RunStatus
@@ -193,3 +194,49 @@ def test_resume_skips_already_deleted_items(tmp_path: Path) -> None:
     )
     assert outcome2.archived == 0
     assert outcome2.deleted == 0
+
+
+def test_resume_archived_item_skips_to_delete(tmp_path: Path) -> None:
+    """An item already ARCHIVED from a prior run should skip download/verify/organize."""
+    assets = _assets(1)
+    _swap_to_jpeg(assets[0], tmp_path / "src.jpg")
+    item = assets[0].item
+
+    fake = FakeICloudPhotos(assets=assets)
+    journal = Journal.open(tmp_path / "state.db")
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+
+    # Simulate prior crashed run that reached ARCHIVED.
+    prior_run = journal.start_run(target_bytes=1, dry_run=False, archive_root=str(archive_root))
+    journal.upsert_item(item, prior_run, ItemState.PLANNED)
+    journal.transition(item.asset_id, ItemState.DOWNLOADING, run_id=prior_run)
+    journal.transition(item.asset_id, ItemState.DOWNLOADED, run_id=prior_run)
+    journal.transition(item.asset_id, ItemState.VERIFIED, run_id=prior_run, sha256="x" * 64)
+    journal.transition(
+        item.asset_id, ItemState.ARCHIVED, run_id=prior_run, primary_path="/fake/path"
+    )
+    journal.end_run(prior_run, RunStatus.CRASHED)
+
+    # Track whether fetch_item is called — it shouldn't be on the shortcut path.
+    fetched: list[str] = []
+    original_fetch = orch.fetch_item
+    def spy_fetch(item, client, *, scratch_dir):
+        fetched.append(item.asset_id)
+        return original_fetch(item, client, scratch_dir=scratch_dir)
+    orch.fetch_item = spy_fetch
+    try:
+        outcome = run_archival(
+            client=fake, journal=journal, archive_root=archive_root,
+            target_bytes=10_000, dry_run=False,
+        )
+    finally:
+        orch.fetch_item = original_fetch
+
+    # No download should have happened
+    assert fetched == []
+    # Delete should have happened
+    assert outcome.deleted == 1
+    assert list(fake.iter_oldest_first()) == []
+    # bytes_archived stays 0 in this run because the archive work was done previously
+    assert outcome.bytes_archived == 0

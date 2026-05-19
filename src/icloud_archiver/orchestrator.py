@@ -1,5 +1,6 @@
 """High-level run loop binding catalog → selector → downloader → verifier → organizer → deleter."""
 
+import contextlib
 import hashlib
 import os
 import shutil
@@ -10,7 +11,7 @@ from icloud_archiver.deleter import DeleteError, delete_asset
 from icloud_archiver.downloader import DownloadError, fetch_item
 from icloud_archiver.icloud_iface import ICloudPhotos
 from icloud_archiver.journal import Journal
-from icloud_archiver.organizer import organize, sidecar_dict
+from icloud_archiver.organizer import OrganizedPaths, organize, sidecar_dict
 from icloud_archiver.reporting import PlanRow
 from icloud_archiver.selector import select_until
 from icloud_archiver.types import CatalogItem, ItemState, RunStatus
@@ -83,7 +84,10 @@ def run_archival(
             )
 
         for item in selected:
-            journal.upsert_item(item, run_id, ItemState.PLANNED)
+            prior = journal.get_state(item.asset_id)
+            if prior not in (ItemState.ARCHIVED, ItemState.DELETING):
+                # New item or earlier-stage resume: enter the full pipeline at PLANNED.
+                journal.upsert_item(item, run_id, ItemState.PLANNED)
             _archive_one(item, client, journal, archive_root, scratch_dir, run_id, outcome)
 
         journal.end_run(run_id, RunStatus.COMPLETED)
@@ -112,6 +116,22 @@ def _hash_first_4kb(path: Path) -> str:
     return h.hexdigest()
 
 
+def _cleanup_organized(organized: OrganizedPaths) -> None:
+    """Best-effort removal of all placed files (primary + hardlinks + sidecars).
+
+    Used to roll back a partial organize when a post-organize check fails.
+    """
+    for path in (
+        organized.primary,
+        organized.sidecar_primary,
+        *organized.hardlinks,
+        *organized.sidecar_hardlinks,
+    ):
+        with contextlib.suppress(OSError):
+            if path.exists():
+                path.unlink()
+
+
 def _archive_one(
     item: CatalogItem,
     client: ICloudPhotos,
@@ -136,7 +156,6 @@ def _archive_one(
             return True
         journal.transition(item.asset_id, ItemState.DELETED, run_id=run_id)
         outcome.deleted += 1
-        outcome.bytes_archived += item.size_bytes
         return True
 
     # Download
@@ -178,6 +197,9 @@ def _archive_one(
     # Post-organize readback (spec §7.1): first-4KB hash must match.
     post_organize_4kb = _hash_first_4kb(organized.primary)
     if post_organize_4kb != pre_organize_4kb:
+        # Remove the corrupted/mismatched files so the archive is clean.
+        # iCloud copy is still present (delete hasn't been called yet).
+        _cleanup_organized(organized)
         journal.transition(
             item.asset_id,
             ItemState.FAILED_VERIFY,
