@@ -54,12 +54,12 @@ version = "0.1.0"
 description = "Archive the oldest iCloud Photos to an external drive, then delete from iCloud."
 requires-python = ">=3.11"
 dependencies = [
-    "pyicloud-ipd>=1.0.0",
+    "pyicloud-ipd>=0.10.0",
     "icloudpd>=1.20.0",
     "click>=8.1.7",
     "tqdm>=4.66.0",
     "structlog>=24.1.0",
-    "keyring>=25.0.0",
+    "keyring>=23.13.1",
     "Pillow>=10.2.0",
     "python-ulid>=2.7.0",
 ]
