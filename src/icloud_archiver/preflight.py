@@ -64,7 +64,7 @@ def list_external_drives() -> list[Drive]:
             try:
                 fs = detect_filesystem(mount_point)
                 free, total = _volume_stats(mount_point)
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError, OSError):
                 continue
             out.append(
                 Drive(
@@ -94,8 +94,9 @@ def _render_table(drives: list[Drive]) -> str:
     rows = ["External drives available:\n"]
     for i, d in enumerate(drives, start=1):
         flag = "  ⚠ will need reformat" if needs_reformat(d.fs) else ""
+        name = d.volume_name[:18]
         rows.append(
-            f"  [{i}]  {d.volume_name:<18} {d.fs.upper():<7} "
+            f"  [{i}]  {name:<18} {d.fs.upper():<7} "
             f"{_human(d.free_bytes)} free / {_human(d.total_bytes)}   "
             f"{d.mount_point}{flag}"
         )
@@ -143,6 +144,8 @@ def confirm_reformat(drive: Drive, *, yes_erase: bool = False) -> bool:
 def reformat_apfs(drive: Drive) -> None:
     """Reformat `drive.device_id` as APFS named after the existing volume name."""
     print(f"Reformatting {drive.device_id} ('{drive.volume_name}') as APFS...")
+    # Output intentionally NOT captured — the user needs to see diskutil's
+    # progress on this destructive operation.
     subprocess.run(
         ["diskutil", "eraseDisk", "APFS", drive.volume_name, drive.device_id],
         check=True,

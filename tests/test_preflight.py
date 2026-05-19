@@ -17,6 +17,8 @@ def test_needs_reformat_true_for_exfat() -> None:
     assert needs_reformat("ntfs")
     assert needs_reformat("msdos")
     assert needs_reformat("fat32")
+    assert needs_reformat("msdos_fat32")
+    assert needs_reformat("msdos fat32")  # space variant normalizes to underscore
 
 
 def test_needs_reformat_false_for_apfs_and_hfs() -> None:
@@ -121,5 +123,6 @@ def test_pick_drive_interactive_quit(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
     ]
     monkeypatch.setattr("builtins.input", lambda _prompt="": "q")
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exc_info:
         pick_drive_interactive(drives)
+    assert exc_info.value.code == 0
