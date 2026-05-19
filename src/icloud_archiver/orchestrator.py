@@ -27,6 +27,7 @@ class RunOutcome:
     failed_delete: int = 0
     skipped: int = 0
     bytes_archived: int = 0
+    bytes_deleted: int = 0  # bytes for items that reached DELETED (== pending-free in Recently Deleted)  # noqa: E501
     plan_rows: list[PlanRow] = field(default_factory=list)
 
 
@@ -156,6 +157,7 @@ def _archive_one(
             return True
         journal.transition(item.asset_id, ItemState.DELETED, run_id=run_id)
         outcome.deleted += 1
+        outcome.bytes_deleted += item.size_bytes
         return True
 
     # Download
@@ -229,4 +231,5 @@ def _archive_one(
         return True
     journal.transition(item.asset_id, ItemState.DELETED, run_id=run_id)
     outcome.deleted += 1
+    outcome.bytes_deleted += item.size_bytes
     return True

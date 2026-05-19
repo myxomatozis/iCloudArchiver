@@ -42,7 +42,7 @@ def _saved_email() -> str | None:
     cfg = state_dir() / "config.json"
     if not cfg.exists():
         return None
-    with contextlib.suppress(Exception):
+    with contextlib.suppress(OSError, json.JSONDecodeError):
         return str(json.loads(cfg.read_text()).get("email"))
     return None
 
@@ -55,8 +55,11 @@ def _save_email(email: str) -> None:
 def _build_client() -> ICloudPhotos:
     email = _saved_email()
     if not email:
-        raise SessionUnavailable("no saved email; run `icloud-archiver login` first")
-    svc = load_session(state_dir() / "cookies", email=email)
+        raise click.ClickException("no saved email; run `icloud-archiver login` first")
+    try:
+        svc = load_session(state_dir() / "cookies", email=email)
+    except SessionUnavailable as exc:
+        raise click.ClickException(str(exc)) from exc
     return RealICloudPhotos(svc)
 
 
@@ -175,7 +178,7 @@ def run(target_freed: str) -> None:
             failed_download=outcome.failed_download,
             skipped=outcome.skipped,
             bytes_archived=outcome.bytes_archived,
-            bytes_pending_free=outcome.bytes_archived,
+            bytes_pending_free=outcome.bytes_deleted,
         )
     )
 
