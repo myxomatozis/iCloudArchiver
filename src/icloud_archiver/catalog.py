@@ -15,7 +15,7 @@ try:
         SmartPhotoAlbum as _SmartPhotoAlbum,
     )
 except ImportError:  # pragma: no cover — only missing in unit-test environments
-    _SmartPhotoAlbum = None  # type: ignore[assignment]
+    _SmartPhotoAlbum = None  # type: ignore[assignment]  # noqa: F841
 
 
 def _normalize_albums(raw: list[Any]) -> list[str]:

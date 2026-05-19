@@ -6,7 +6,7 @@ from iCloud after strict per-item verification.
 
 ## Why
 
-iCloud Photos plans top out at 2 TB. If your library has crossed that line,
+iCloud Photos plans top out? If your library has crossed that line,
 this tool gives you a controlled, journaled, resumable way to move older years
 to an external drive and reclaim space, without losing metadata, edits,
 Live Photo videos, or album membership.
