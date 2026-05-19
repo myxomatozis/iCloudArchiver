@@ -2,10 +2,10 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 
-class ItemState(str, Enum):
+class ItemState(StrEnum):
     PLANNED = "PLANNED"
     DOWNLOADING = "DOWNLOADING"
     FAILED_DOWNLOAD = "FAILED_DOWNLOAD"
@@ -26,7 +26,7 @@ class ItemState(str, Enum):
 _TERMINAL_STATES = frozenset({ItemState.DELETED, ItemState.SKIPPED, ItemState.FAILED_VERIFY})
 
 
-class RunStatus(str, Enum):
+class RunStatus(StrEnum):
     COMPLETED = "completed"
     ABORTED = "aborted"
     CRASHED = "crashed"
@@ -39,6 +39,10 @@ class CatalogItem:
     `albums` is sorted case-insensitively for determinism. albums[0] is the
     primary placement folder. Apple folder/album nesting flattens to
     "Parent/Child" strings.
+
+    Callers MUST NOT mutate `albums` after construction. The dataclass is
+    frozen against attribute reassignment but does not deep-freeze list
+    contents; mutation would silently break the determinism invariant.
     """
 
     asset_id: str
