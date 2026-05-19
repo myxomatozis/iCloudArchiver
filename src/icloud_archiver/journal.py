@@ -1,4 +1,9 @@
-"""SQLite-backed journal — source of truth for archival state."""
+"""SQLite-backed journal — source of truth for archival state.
+
+Single-writer guarantee required: the TOCTOU patterns in upsert_item/transition
+(SELECT followed by INSERT/UPDATE in separate statements) are safe only when at
+most one process holds a Journal connection at a time.
+"""
 
 import json
 import sqlite3
@@ -31,7 +36,8 @@ CREATE TABLE IF NOT EXISTS items (
   sha256            TEXT,
   icloud_checksum   TEXT,
   error             TEXT,
-  updated_at        TEXT NOT NULL
+  updated_at        TEXT NOT NULL,
+  FOREIGN KEY (first_seen_run) REFERENCES runs(run_id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS item_events (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +46,9 @@ CREATE TABLE IF NOT EXISTS item_events (
   at                TEXT NOT NULL,
   from_state        TEXT,
   to_state          TEXT NOT NULL,
-  detail            TEXT
+  detail            TEXT,
+  FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE,
+  FOREIGN KEY (asset_id) REFERENCES items(asset_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS items_state_idx ON items(state);
 CREATE INDEX IF NOT EXISTS items_created_idx ON items(created_at);
@@ -80,10 +88,12 @@ class Journal:
         return run_id
 
     def end_run(self, run_id: str, status: RunStatus) -> None:
-        self._conn.execute(
+        cur = self._conn.execute(
             "UPDATE runs SET ended_at = ?, ended_status = ? WHERE run_id = ?",
             (_now(), status.value, run_id),
         )
+        if cur.rowcount == 0:
+            raise KeyError(f"run_id not in journal: {run_id}")
         self._conn.commit()
 
     def list_runs(self) -> list[dict[str, Any]]:
@@ -97,8 +107,12 @@ class Journal:
             "SELECT 1 FROM items WHERE asset_id = ?", (item.asset_id,)
         ).fetchone()
         if existed:
+            current = self.get_state(item.asset_id)
+            if current is not None and current.is_terminal():
+                return  # already done; do not re-open
             self.transition(item.asset_id, state, run_id=run_id)
             return
+        ts = _now()
         cols = "asset_id, first_seen_run, created_at, size_bytes, state, updated_at"
         self._conn.execute(
             f"INSERT INTO items({cols}) VALUES (?, ?, ?, ?, ?, ?)",
@@ -108,13 +122,13 @@ class Journal:
                 item.created_at.isoformat(timespec="seconds"),
                 item.size_bytes,
                 state.value,
-                _now(),
+                ts,
             ),
         )
         self._conn.execute(
             "INSERT INTO item_events(run_id, asset_id, at, from_state, to_state) "
             "VALUES (?, ?, ?, ?, ?)",
-            (run_id, item.asset_id, _now(), None, state.value),
+            (run_id, item.asset_id, ts, None, state.value),
         )
         self._conn.commit()
 
@@ -136,9 +150,10 @@ class Journal:
         if row is None:
             raise KeyError(f"asset_id not in journal: {asset_id}")
         from_state = row["state"]
+        ts = _now()  # captured ONCE for both updates
 
         sets = ["state = ?", "updated_at = ?"]
-        params: list[Any] = [new_state.value, _now()]
+        params: list[Any] = [new_state.value, ts]
         if primary_path is not None:
             sets.append("primary_path = ?")
             params.append(primary_path)
@@ -162,7 +177,7 @@ class Journal:
             (
                 run_id,
                 asset_id,
-                _now(),
+                ts,  # same timestamp
                 from_state,
                 new_state.value,
                 json.dumps(detail) if detail else None,
@@ -196,11 +211,7 @@ class Journal:
 
     def resumable_items(self) -> list[CatalogItem]:
         """Return items in non-terminal states. Used at run start to route resume work."""
-        terminal = [
-            ItemState.DELETED.value,
-            ItemState.SKIPPED.value,
-            ItemState.FAILED_VERIFY.value,
-        ]
+        terminal = [s.value for s in ItemState if s.is_terminal()]
         q = (
             "SELECT asset_id, created_at, size_bytes FROM items "
             f"WHERE state NOT IN ({','.join('?' * len(terminal))}) "

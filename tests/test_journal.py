@@ -22,6 +22,11 @@ def _make_item(asset_id: str = "asset_1", size: int = 1000) -> CatalogItem:
 def test_open_creates_schema(tmp_path: Path) -> None:
     journal = Journal.open(tmp_path / "state.db")
     assert (tmp_path / "state.db").exists()
+    import sqlite3
+    conn = sqlite3.connect(str(tmp_path / "state.db"))
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"runs", "items", "item_events"} <= tables
+    conn.close()
     journal.close()
 
 
@@ -34,6 +39,7 @@ def test_start_and_end_run(tmp_path: Path) -> None:
     assert len(rows) == 1
     assert rows[0]["run_id"] == run_id
     assert rows[0]["ended_status"] == "completed"
+    journal.close()
 
 
 def test_transition_records_event_and_updates_state(tmp_path: Path) -> None:
@@ -50,6 +56,7 @@ def test_transition_records_event_and_updates_state(tmp_path: Path) -> None:
 
     events = journal.events_for(item.asset_id)
     assert [e["to_state"] for e in events] == ["PLANNED", "DOWNLOADING", "DOWNLOADED"]
+    journal.close()
 
 
 def test_resumable_items_returns_only_non_terminal(tmp_path: Path) -> None:
@@ -62,6 +69,7 @@ def test_resumable_items_returns_only_non_terminal(tmp_path: Path) -> None:
 
     resumable = journal.resumable_items()
     assert [r.asset_id for r in resumable] == ["a"]
+    journal.close()
 
 
 def test_bytes_freed_total(tmp_path: Path) -> None:
@@ -76,7 +84,10 @@ def test_bytes_freed_total(tmp_path: Path) -> None:
     journal.transition("b", ItemState.DELETED, run_id=run_id)
     # c not deleted yet
 
+    # All-time aggregate (no run_id) covers the IS NULL branch too
+    assert journal.bytes_freed_total() == 7_000
     assert journal.bytes_freed_total(run_id) == 7_000
+    journal.close()
 
 
 def test_is_terminal_reflects_state(tmp_path: Path) -> None:
@@ -91,3 +102,4 @@ def test_is_terminal_reflects_state(tmp_path: Path) -> None:
     assert journal.is_terminal("c")
     assert not journal.is_terminal("a")
     assert not journal.is_terminal("never-seen")  # unknown items aren't terminal
+    journal.close()
