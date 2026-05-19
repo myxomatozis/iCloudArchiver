@@ -25,10 +25,7 @@ Live Photo videos, or album membership.
   membership, captions, favorites, edits info, original filename).
 - **Recently Deleted** is never automatically emptied — `empty-trash` is its
   own command with its own typed-confirmation gate. The 30-day Apple window
-  is your recovery path.
-
-Full design: [`docs/superpowers/specs/2026-05-19-icloud-archiver-design.md`](docs/superpowers/specs/2026-05-19-icloud-archiver-design.md).
-Implementation plan: [`docs/superpowers/plans/2026-05-19-icloud-archiver.md`](docs/superpowers/plans/2026-05-19-icloud-archiver.md).
+  your recovery path.
 
 ## Requirements
 

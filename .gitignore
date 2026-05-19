@@ -17,3 +17,6 @@ state.db-journal
 CLAUDE.md
 .claude/
 .DS_Store
+
+# Local docs (Superpowers plans, specs, notes)
+docs/
