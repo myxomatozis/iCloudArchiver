@@ -141,18 +141,69 @@ def plan(target_freed: str) -> None:
     plan_path = _plans_dir() / f"{ts}-plan.md"
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(md)
+
+    # Also save a machine-readable JSON so `run --from-plan` can skip re-scanning.
+    json_path = plan_path.with_suffix(".json")
+    json_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "target_bytes": target_bytes,
+                "archive_root": str(archive_root),
+                "created_at": ts,
+                "plan_run_id": outcome.plan_run_id,
+                "item_count": len(outcome.plan_items),
+            },
+            indent=2,
+        )
+    )
+
     click.echo(md)
     click.echo(f"\nPlan written to {plan_path}")
+    click.echo(
+        f"Plan JSON written to {json_path}  "
+        "(pass to `run --from-plan` to skip re-scanning; item details are in the journal DB)"
+    )
 
 
 @main.command()
-@click.option("--target-freed", required=True, help="Bytes to free, e.g. 1TB or 500GB")
-def run(target_freed: str) -> None:
-    """Archive the oldest items until target_bytes is freed."""
-    target_bytes = parse_size(target_freed)
+@click.option("--target-freed", default=None, help="Bytes to free, e.g. 1TB or 500GB")
+@click.option(
+    "--from-plan",
+    "plan_file",
+    default=None,
+    type=click.Path(exists=True, path_type=Path),
+    help="Path to a JSON plan file produced by `plan`; skips iCloud scanning.",
+)
+def run(target_freed: str | None, plan_file: Path | None) -> None:
+    """Archive the oldest items until target_bytes is freed.
+
+    Either --target-freed or --from-plan must be provided.  When --from-plan is
+    given the iCloud catalog scan is skipped and the items listed in the plan
+    file are archived directly.
+    """
+    if plan_file is None and target_freed is None:
+        raise click.UsageError("provide --target-freed or --from-plan (see --help)")
+
+    plan_run_id: str | None = None
+    plan_file_name: str | None = None
+    if plan_file is not None:
+        plan_data = json.loads(plan_file.read_text())
+        target_bytes = plan_data["target_bytes"]
+        plan_run_id = plan_data["plan_run_id"]
+        plan_file_name = plan_file.name
+    else:
+        assert target_freed is not None  # checked above
+        target_bytes = parse_size(target_freed)
+
     archive_root, _drive = _interactive_picker()
     client = _build_client()
     journal = Journal.open(_state_path())
+
+    preselected = None
+    if plan_run_id is not None:
+        preselected = journal.items_for_run(plan_run_id)
+        click.echo(f"Loaded {len(preselected)} items from {plan_file_name} — skipping iCloud scan.")
 
     sleep_block = caffeinate_for_run()
     try:
@@ -162,6 +213,7 @@ def run(target_freed: str) -> None:
             archive_root=archive_root,
             target_bytes=target_bytes,
             dry_run=False,
+            preselected=preselected,
         )
     finally:
         sleep_block.terminate()

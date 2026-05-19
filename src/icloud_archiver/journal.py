@@ -37,6 +37,11 @@ CREATE TABLE IF NOT EXISTS items (
   icloud_checksum   TEXT,
   error             TEXT,
   updated_at        TEXT NOT NULL,
+  original_filename TEXT,
+  albums            TEXT,
+  has_live_photo    INTEGER,
+  has_edits         INTEGER,
+  mime_type         TEXT,
   FOREIGN KEY (first_seen_run) REFERENCES runs(run_id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS item_events (
@@ -65,6 +70,22 @@ class Journal:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
+        self._conn.commit()
+        self._migrate_schema()
+
+    def _migrate_schema(self) -> None:
+        """Add any missing columns to the items table (safe for existing databases)."""
+        existing = {r[1] for r in self._conn.execute("PRAGMA table_info(items)").fetchall()}
+        new_columns = [
+            ("original_filename", "TEXT"),
+            ("albums", "TEXT"),
+            ("has_live_photo", "INTEGER"),
+            ("has_edits", "INTEGER"),
+            ("mime_type", "TEXT"),
+        ]
+        for col_name, col_type in new_columns:
+            if col_name not in existing:
+                self._conn.execute(f"ALTER TABLE items ADD COLUMN {col_name} {col_type}")
         self._conn.commit()
 
     @classmethod
@@ -113,9 +134,12 @@ class Journal:
             self.transition(item.asset_id, state, run_id=run_id)
             return
         ts = _now()
-        cols = "asset_id, first_seen_run, created_at, size_bytes, state, updated_at"
+        cols = (
+            "asset_id, first_seen_run, created_at, size_bytes, state, updated_at, "
+            "original_filename, albums, has_live_photo, has_edits, mime_type"
+        )
         self._conn.execute(
-            f"INSERT INTO items({cols}) VALUES (?, ?, ?, ?, ?, ?)",
+            f"INSERT INTO items({cols}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 item.asset_id,
                 run_id,
@@ -123,6 +147,11 @@ class Journal:
                 item.size_bytes,
                 state.value,
                 ts,
+                item.original_filename,
+                json.dumps(item.albums),
+                int(item.has_live_photo),
+                int(item.has_edits),
+                item.mime_type,
             ),
         )
         self._conn.execute(
@@ -211,7 +240,8 @@ class Journal:
         """Return items in non-terminal states. Used at run start to route resume work."""
         terminal = [s.value for s in ItemState if s.is_terminal()]
         q = (
-            "SELECT asset_id, created_at, size_bytes FROM items "
+            "SELECT asset_id, created_at, size_bytes, original_filename, albums, "
+            "has_live_photo, has_edits, mime_type, icloud_checksum FROM items "
             f"WHERE state NOT IN ({','.join('?' * len(terminal))}) "
             "ORDER BY created_at ASC"
         )
@@ -223,12 +253,43 @@ class Journal:
                     asset_id=r["asset_id"],
                     created_at=datetime.fromisoformat(r["created_at"]),
                     size_bytes=r["size_bytes"],
-                    albums=[],  # catalog re-fetches full details; resume routing only needs id
-                    original_filename="",
-                    has_live_photo=False,
-                    has_edits=False,
-                    mime_type="",
-                    icloud_checksum=None,
+                    albums=json.loads(r["albums"] or "[]"),
+                    original_filename=r["original_filename"] or "",
+                    has_live_photo=bool(r["has_live_photo"]),
+                    has_edits=bool(r["has_edits"]),
+                    mime_type=r["mime_type"] or "",
+                    icloud_checksum=r["icloud_checksum"],
+                )
+            )
+        return out
+
+    def items_for_run(self, run_id: str) -> list[CatalogItem]:
+        """Return fully populated CatalogItems first-seen in *run_id* that are still PLANNED.
+
+        Used by ``run --from-plan`` to load the item list a preceding ``plan`` run produced
+        without deserialising a large JSON array.
+        """
+        rows = self._conn.execute(
+            "SELECT asset_id, created_at, size_bytes, original_filename, albums, "
+            "has_live_photo, has_edits, mime_type, icloud_checksum "
+            "FROM items "
+            "WHERE first_seen_run = ? AND state = ? "
+            "ORDER BY created_at ASC",
+            (run_id, ItemState.PLANNED.value),
+        ).fetchall()
+        out: list[CatalogItem] = []
+        for r in rows:
+            out.append(
+                CatalogItem(
+                    asset_id=r["asset_id"],
+                    created_at=datetime.fromisoformat(r["created_at"]),
+                    size_bytes=r["size_bytes"],
+                    albums=json.loads(r["albums"] or "[]"),
+                    original_filename=r["original_filename"] or "",
+                    has_live_photo=bool(r["has_live_photo"]),
+                    has_edits=bool(r["has_edits"]),
+                    mime_type=r["mime_type"] or "",
+                    icloud_checksum=r["icloud_checksum"],
                 )
             )
         return out

@@ -104,3 +104,111 @@ def test_is_terminal_reflects_state(tmp_path: Path) -> None:
     assert not journal.is_terminal("a")
     assert not journal.is_terminal("never-seen")  # unknown items aren't terminal
     journal.close()
+
+
+def test_upsert_item_stores_full_catalog_item(tmp_path: Path) -> None:
+    """upsert_item stores all CatalogItem fields; a direct SQL read-back must reflect them."""
+    import json as _json
+    import sqlite3
+
+    journal = Journal.open(tmp_path / "state.db")
+    run_id = journal.start_run(target_bytes=1_000, dry_run=True, archive_root="/Volumes/X")
+    item = CatalogItem(
+        asset_id="full_item",
+        created_at=datetime(2020, 6, 15, 12, 0, 0, tzinfo=UTC),
+        size_bytes=4_242,
+        albums=["Holidays", "Family"],
+        original_filename="photo.HEIC",
+        has_live_photo=True,
+        has_edits=False,
+        mime_type="image/heic",
+        icloud_checksum="abc123",
+    )
+    journal.upsert_item(item, run_id, ItemState.PLANNED)
+    journal.close()
+
+    # Read back via a raw connection to verify the stored values directly.
+    conn = sqlite3.connect(str(tmp_path / "state.db"))
+    row = conn.execute(
+        "SELECT original_filename, albums, has_live_photo, has_edits, mime_type "
+        "FROM items WHERE asset_id = ?",
+        (item.asset_id,),
+    ).fetchone()
+    conn.close()
+
+    assert row is not None
+    assert row[0] == "photo.HEIC"
+    assert _json.loads(row[1]) == ["Holidays", "Family"]
+    assert row[2] == 1  # has_live_photo stored as integer 1
+    assert row[3] == 0  # has_edits stored as integer 0
+    assert row[4] == "image/heic"
+
+
+def test_items_for_run(tmp_path: Path) -> None:
+    """items_for_run returns fully populated CatalogItems for a given plan run.
+
+    Verifies:
+    - Items from the correct run in PLANNED state are returned.
+    - Items in terminal states are excluded.
+    - Items from a different run are excluded.
+    """
+    journal = Journal.open(tmp_path / "state.db")
+
+    plan_run = journal.start_run(target_bytes=1_000, dry_run=True, archive_root="/Volumes/X")
+    other_run = journal.start_run(target_bytes=1_000, dry_run=False, archive_root="/Volumes/X")
+
+    planned_item = CatalogItem(
+        asset_id="planned",
+        created_at=datetime(2019, 3, 10, tzinfo=UTC),
+        size_bytes=2_000,
+        albums=["Trips", "Italy"],
+        original_filename="venice.HEIC",
+        has_live_photo=True,
+        has_edits=True,
+        mime_type="image/heic",
+        icloud_checksum=None,
+    )
+    terminal_item = CatalogItem(
+        asset_id="terminal",
+        created_at=datetime(2019, 4, 1, tzinfo=UTC),
+        size_bytes=1_000,
+        albums=[],
+        original_filename="gone.jpg",
+        has_live_photo=False,
+        has_edits=False,
+        mime_type="image/jpeg",
+        icloud_checksum=None,
+    )
+    other_run_item = CatalogItem(
+        asset_id="other_run",
+        created_at=datetime(2019, 5, 1, tzinfo=UTC),
+        size_bytes=500,
+        albums=["Work"],
+        original_filename="work.png",
+        has_live_photo=False,
+        has_edits=False,
+        mime_type="image/png",
+        icloud_checksum=None,
+    )
+
+    journal.upsert_item(planned_item, plan_run, ItemState.PLANNED)
+    journal.upsert_item(terminal_item, plan_run, ItemState.PLANNED)
+    journal.transition("terminal", ItemState.DELETED, run_id=plan_run)
+    journal.upsert_item(other_run_item, other_run, ItemState.PLANNED)
+    journal.end_run(plan_run, RunStatus.COMPLETED)
+    journal.end_run(other_run, RunStatus.COMPLETED)
+
+    results = journal.items_for_run(plan_run)
+    journal.close()
+
+    # Only 'planned' should be returned — terminal and other-run items excluded.
+    assert len(results) == 1
+    result = results[0]
+    assert result.asset_id == "planned"
+    assert result.albums == ["Trips", "Italy"]
+    assert result.original_filename == "venice.HEIC"
+    assert result.has_live_photo is True
+    assert result.has_edits is True
+    assert result.mime_type == "image/heic"
+    assert result.size_bytes == 2_000
+    assert result.created_at == datetime(2019, 3, 10, tzinfo=UTC)

@@ -4,8 +4,11 @@ import contextlib
 import hashlib
 import os
 import shutil
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from tqdm import tqdm
 
 from icloud_archiver.deleter import DeleteError, delete_asset
 from icloud_archiver.downloader import DownloadError, fetch_item
@@ -29,6 +32,8 @@ class RunOutcome:
     bytes_archived: int = 0
     bytes_deleted: int = 0  # bytes for items that reached DELETED (== pending-free in Recently Deleted)  # noqa: E501
     plan_rows: list[PlanRow] = field(default_factory=list)
+    plan_items: list[CatalogItem] = field(default_factory=list)  # populated during dry_run
+    plan_run_id: str | None = None  # run_id of the dry-run that produced this plan
 
 
 class InsufficientSpace(Exception):
@@ -42,7 +47,14 @@ def run_archival(
     archive_root: Path,
     target_bytes: int,
     dry_run: bool,
+    preselected: list[CatalogItem] | None = None,
 ) -> RunOutcome:
+    """Run the archival pipeline.
+
+    If *preselected* is supplied the iCloud catalog scan is skipped entirely and
+    those items are processed directly.  This lets ``run --from-plan`` reuse the
+    item list produced by a previous ``plan`` invocation.
+    """
     run_id = journal.start_run(
         target_bytes=target_bytes,
         dry_run=dry_run,
@@ -58,10 +70,18 @@ def run_archival(
     try:
         # Materialize selection up-front so state mutations during processing
         # do not affect what items we iterate over.
-        catalog = client.iter_oldest_first()
-        selected = list(select_until(catalog, target_bytes=target_bytes, journal=journal))
+        if preselected is not None:
+            # Re-filter through the journal so already-terminal items are skipped
+            # in case the journal was updated between plan and run.
+            selected = [i for i in preselected if not journal.is_terminal(i.asset_id)]
+        else:
+            catalog = client.iter_oldest_first()
+            selected = list(select_until(catalog, target_bytes=target_bytes, journal=journal))
 
         if dry_run:
+            for item in selected:
+                journal.upsert_item(item, run_id, ItemState.PLANNED)
+            outcome.plan_run_id = run_id
             outcome.plan_rows.extend(
                 PlanRow(
                     asset_id=item.asset_id,
@@ -71,6 +91,7 @@ def run_archival(
                 )
                 for item in selected
             )
+            outcome.plan_items.extend(selected)
             journal.end_run(run_id, RunStatus.COMPLETED)
             return outcome
 
@@ -83,12 +104,21 @@ def run_archival(
                 f"need {required} bytes on archive drive (1.2x {projected}); only {free} available"
             )
 
-        for item in selected:
-            prior = journal.get_state(item.asset_id)
-            if prior not in (ItemState.ARCHIVED, ItemState.DELETING):
-                # New item or earlier-stage resume: enter the full pipeline at PLANNED.
-                journal.upsert_item(item, run_id, ItemState.PLANNED)
-            _archive_one(item, client, journal, archive_root, scratch_dir, run_id, outcome)
+        with tqdm(
+            selected,
+            desc="Archiving",
+            unit=" item",
+            total=len(selected),
+            file=sys.stderr,
+            dynamic_ncols=True,
+        ) as bar:
+            for item in bar:
+                bar.set_postfix_str(item.original_filename[-25:])
+                prior = journal.get_state(item.asset_id)
+                if prior not in (ItemState.ARCHIVED, ItemState.DELETING):
+                    # New item or earlier-stage resume: enter the full pipeline at PLANNED.
+                    journal.upsert_item(item, run_id, ItemState.PLANNED)
+                _archive_one(item, client, journal, archive_root, scratch_dir, run_id, outcome)
 
         journal.end_run(run_id, RunStatus.COMPLETED)
     except KeyboardInterrupt:
