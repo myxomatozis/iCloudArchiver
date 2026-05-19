@@ -1,0 +1,125 @@
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+
+from icloud_archiver.preflight import (
+    Drive,
+    list_external_drives,
+    needs_reformat,
+    pick_drive_interactive,
+)
+
+
+def test_needs_reformat_true_for_exfat() -> None:
+    assert needs_reformat("exfat")
+    assert needs_reformat("ExFAT")
+    assert needs_reformat("ntfs")
+    assert needs_reformat("msdos")
+    assert needs_reformat("fat32")
+
+
+def test_needs_reformat_false_for_apfs_and_hfs() -> None:
+    assert not needs_reformat("apfs")
+    assert not needs_reformat("APFS")
+    assert not needs_reformat("hfs+")
+    assert not needs_reformat("journaled hfs+")
+
+
+def test_list_external_drives_filters_system(monkeypatch: pytest.MonkeyPatch) -> None:
+    plist = b"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>AllDisksAndPartitions</key>
+  <array>
+    <dict>
+      <key>DeviceIdentifier</key><string>disk0</string>
+      <key>Partitions</key>
+      <array>
+        <dict>
+          <key>DeviceIdentifier</key><string>disk0s2</string>
+          <key>VolumeName</key><string>Macintosh HD</string>
+          <key>MountPoint</key><string>/</string>
+        </dict>
+      </array>
+    </dict>
+    <dict>
+      <key>DeviceIdentifier</key><string>disk4</string>
+      <key>Partitions</key>
+      <array>
+        <dict>
+          <key>DeviceIdentifier</key><string>disk4s2</string>
+          <key>VolumeName</key><string>Samsung T7</string>
+          <key>MountPoint</key><string>/Volumes/T7</string>
+        </dict>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>"""
+
+    def fake_run(*_args: object, **_kwargs: object) -> MagicMock:
+        m = MagicMock()
+        m.stdout = plist
+        m.returncode = 0
+        return m
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "icloud_archiver.preflight.detect_filesystem",
+        lambda _mp: "apfs",
+    )
+    monkeypatch.setattr(
+        "icloud_archiver.preflight._volume_stats",
+        lambda _mp: (1_800_000_000_000, 2_000_000_000_000),
+    )
+
+    drives = list_external_drives()
+    assert [d.volume_name for d in drives] == ["Samsung T7"]
+    assert drives[0].mount_point == Path("/Volumes/T7")
+    assert drives[0].fs == "apfs"
+    assert drives[0].is_external
+
+
+def test_pick_drive_interactive_selects_by_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    drives = [
+        Drive(
+            device_id="disk4s2",
+            volume_name="Samsung T7",
+            mount_point=Path("/Volumes/T7"),
+            fs="apfs",
+            free_bytes=1_800_000_000_000,
+            total_bytes=2_000_000_000_000,
+            is_external=True,
+        ),
+        Drive(
+            device_id="disk5s2",
+            volume_name="LaCie",
+            mount_point=Path("/Volumes/LaCie"),
+            fs="hfs+",
+            free_bytes=500_000_000_000,
+            total_bytes=2_000_000_000_000,
+            is_external=True,
+        ),
+    ]
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "2")
+    picked = pick_drive_interactive(drives)
+    assert picked.volume_name == "LaCie"
+
+
+def test_pick_drive_interactive_quit(monkeypatch: pytest.MonkeyPatch) -> None:
+    drives = [
+        Drive(
+            device_id="disk4s2",
+            volume_name="X",
+            mount_point=Path("/Volumes/X"),
+            fs="apfs",
+            free_bytes=1,
+            total_bytes=1,
+            is_external=True,
+        ),
+    ]
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "q")
+    with pytest.raises(SystemExit):
+        pick_drive_interactive(drives)
