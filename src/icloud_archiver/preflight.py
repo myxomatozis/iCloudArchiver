@@ -44,9 +44,7 @@ def _volume_stats(mount_point: Path) -> tuple[int, int]:
 
 def list_external_drives() -> list[Drive]:
     """Probe `diskutil list -plist` and return mounted, non-system volumes."""
-    res = subprocess.run(
-        ["diskutil", "list", "-plist"], capture_output=True, check=True
-    )
+    res = subprocess.run(["diskutil", "list", "-plist"], capture_output=True, check=True)
     data = plistlib.loads(res.stdout)
     out: list[Drive] = []
     for disk in data.get("AllDisksAndPartitions", []):
@@ -57,9 +55,7 @@ def list_external_drives() -> list[Drive]:
             mount_point = Path(mp)
             if mount_point == Path("/"):
                 continue
-            if not mount_point.is_absolute() or not str(mount_point).startswith(
-                "/Volumes/"
-            ):
+            if not mount_point.is_absolute() or not str(mount_point).startswith("/Volumes/"):
                 continue
             try:
                 fs = detect_filesystem(mount_point)

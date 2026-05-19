@@ -167,9 +167,7 @@ class Journal:
             sets.append("error = ?")
             params.append(error)
         params.append(asset_id)
-        self._conn.execute(
-            f"UPDATE items SET {', '.join(sets)} WHERE asset_id = ?", params
-        )
+        self._conn.execute(f"UPDATE items SET {', '.join(sets)} WHERE asset_id = ?", params)
 
         self._conn.execute(
             "INSERT INTO item_events(run_id, asset_id, at, from_state, to_state, detail) "

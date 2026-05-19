@@ -22,9 +22,7 @@ def _human(n: int) -> str:
     return f"{f:.1f} PB"
 
 
-def render_plan_markdown(
-    rows: list[PlanRow], *, target_bytes: int, archive_root: str
-) -> str:
+def render_plan_markdown(rows: list[PlanRow], *, target_bytes: int, archive_root: str) -> str:
     if not rows:
         return "# iCloud Archiver — Plan\n\nNothing to archive (target reached with 0 items)."
     total = sum(r.size_bytes for r in rows)

@@ -80,8 +80,7 @@ def run_archival(
         free = _free_bytes(archive_root)
         if free < required:
             raise InsufficientSpace(
-                f"need {required} bytes on archive drive (1.2x {projected}); "
-                f"only {free} available"
+                f"need {required} bytes on archive drive (1.2x {projected}); only {free} available"
             )
 
         for item in selected:
@@ -165,9 +164,7 @@ def _archive_one(
     try:
         files = fetch_item(item, client, scratch_dir=scratch_dir)
     except DownloadError as exc:
-        journal.transition(
-            item.asset_id, ItemState.FAILED_DOWNLOAD, run_id=run_id, error=str(exc)
-        )
+        journal.transition(item.asset_id, ItemState.FAILED_DOWNLOAD, run_id=run_id, error=str(exc))
         outcome.failed_download += 1
         return False
     journal.transition(item.asset_id, ItemState.DOWNLOADED, run_id=run_id)
@@ -177,9 +174,7 @@ def _archive_one(
     try:
         result = verify(item, files.original)
     except VerifyError as exc:
-        journal.transition(
-            item.asset_id, ItemState.FAILED_VERIFY, run_id=run_id, error=str(exc)
-        )
+        journal.transition(item.asset_id, ItemState.FAILED_VERIFY, run_id=run_id, error=str(exc))
         outcome.failed_verify += 1
         for p in (files.original, files.live_photo, files.edited):
             if p is not None and p.exists():
@@ -187,9 +182,7 @@ def _archive_one(
         return False
 
     pre_organize_4kb = _hash_first_4kb(files.original)
-    journal.transition(
-        item.asset_id, ItemState.VERIFIED, run_id=run_id, sha256=result.sha256
-    )
+    journal.transition(item.asset_id, ItemState.VERIFIED, run_id=run_id, sha256=result.sha256)
 
     # Organize
     journal.transition(item.asset_id, ItemState.ORGANIZING, run_id=run_id)

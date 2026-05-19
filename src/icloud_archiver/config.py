@@ -11,7 +11,7 @@ _DECIMAL_UNITS = {
     "GB": 1_000_000_000,
     "TB": 1_000_000_000_000,
 }
-_BINARY_UNITS = {"KIB": 1024, "MIB": 1024 ** 2, "GIB": 1024 ** 3, "TIB": 1024 ** 4}
+_BINARY_UNITS = {"KIB": 1024, "MIB": 1024**2, "GIB": 1024**3, "TIB": 1024**4}
 _ALL_UNITS = {**_DECIMAL_UNITS, **_BINARY_UNITS}
 
 _SIZE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([A-Za-z]*)\s*$")

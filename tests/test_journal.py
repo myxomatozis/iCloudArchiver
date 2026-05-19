@@ -23,6 +23,7 @@ def test_open_creates_schema(tmp_path: Path) -> None:
     journal = Journal.open(tmp_path / "state.db")
     assert (tmp_path / "state.db").exists()
     import sqlite3
+
     conn = sqlite3.connect(str(tmp_path / "state.db"))
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"runs", "items", "item_events"} <= tables
@@ -95,8 +96,8 @@ def test_is_terminal_reflects_state(tmp_path: Path) -> None:
     journal = Journal.open(tmp_path / "state.db")
     run_id = journal.start_run(target_bytes=10_000, dry_run=False, archive_root="/Volumes/X")
     a, b, c = _make_item("a"), _make_item("b"), _make_item("c")
-    journal.upsert_item(a, run_id, ItemState.PLANNED)        # non-terminal
-    journal.upsert_item(b, run_id, ItemState.DELETED)        # terminal
+    journal.upsert_item(a, run_id, ItemState.PLANNED)  # non-terminal
+    journal.upsert_item(b, run_id, ItemState.DELETED)  # terminal
     journal.upsert_item(c, run_id, ItemState.FAILED_VERIFY)  # terminal
     assert journal.is_terminal("b")
     assert journal.is_terminal("c")

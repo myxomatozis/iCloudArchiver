@@ -77,17 +77,13 @@ def _interactive_picker() -> tuple[Path, Any]:
             raise SystemExit(1)
         reformat_apfs(drive)
         drives = list_external_drives()
-        new_drive = next(
-            (d for d in drives if d.volume_name == drive.volume_name), None
-        )
+        new_drive = next((d for d in drives if d.volume_name == drive.volume_name), None)
         if new_drive is None or needs_reformat(new_drive.fs):
             click.echo("Reformat did not yield an APFS volume.", err=True)
             raise SystemExit(1)
         drive = new_drive
 
-    prompt = (
-        f"Archive subdirectory name on '{drive.volume_name}' [default: iCloud-Archive]: "
-    )
+    prompt = f"Archive subdirectory name on '{drive.volume_name}' [default: iCloud-Archive]: "
     subdir = input(prompt).strip() or "iCloud-Archive"
     archive_root = drive.mount_point / subdir
     archive_root.mkdir(parents=True, exist_ok=True)

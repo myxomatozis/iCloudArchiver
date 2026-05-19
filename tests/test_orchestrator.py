@@ -184,13 +184,19 @@ def test_resume_skips_already_deleted_items(tmp_path: Path) -> None:
 
     # Run 1: archive both
     run_archival(
-        client=fake, journal=journal, archive_root=archive_root,
-        target_bytes=10_000, dry_run=False,
+        client=fake,
+        journal=journal,
+        archive_root=archive_root,
+        target_bytes=10_000,
+        dry_run=False,
     )
     # Run 2: nothing left to do
     outcome2 = run_archival(
-        client=fake, journal=journal, archive_root=archive_root,
-        target_bytes=10_000, dry_run=False,
+        client=fake,
+        journal=journal,
+        archive_root=archive_root,
+        target_bytes=10_000,
+        dry_run=False,
     )
     assert outcome2.archived == 0
     assert outcome2.deleted == 0
@@ -221,14 +227,19 @@ def test_resume_archived_item_skips_to_delete(tmp_path: Path) -> None:
     # Track whether fetch_item is called — it shouldn't be on the shortcut path.
     fetched: list[str] = []
     original_fetch = orch.fetch_item
+
     def spy_fetch(item, client, *, scratch_dir):
         fetched.append(item.asset_id)
         return original_fetch(item, client, scratch_dir=scratch_dir)
+
     orch.fetch_item = spy_fetch
     try:
         outcome = run_archival(
-            client=fake, journal=journal, archive_root=archive_root,
-            target_bytes=10_000, dry_run=False,
+            client=fake,
+            journal=journal,
+            archive_root=archive_root,
+            target_bytes=10_000,
+            dry_run=False,
         )
     finally:
         orch.fetch_item = original_fetch

@@ -9,14 +9,16 @@ from PIL import Image, UnidentifiedImageError
 
 from icloud_archiver.types import CatalogItem
 
-_IMAGE_MIMES = frozenset({
-    "image/jpeg",
-    "image/png",
-    "image/heic",
-    "image/heif",
-    "image/tiff",
-    "image/gif",
-})
+_IMAGE_MIMES = frozenset(
+    {
+        "image/jpeg",
+        "image/png",
+        "image/heic",
+        "image/heif",
+        "image/tiff",
+        "image/gif",
+    }
+)
 
 _VIDEO_MIMES = frozenset({"video/mp4", "video/quicktime", "video/mov"})
 
@@ -85,9 +87,7 @@ def _walk_mp4_atoms(path: Path) -> None:
     if "mdat" not in seen:
         raise VerifyError(f"mp4 missing mdat atom in {path.name}")
     if total != file_size:
-        raise VerifyError(
-            f"mp4 atoms ({total}B) do not cover file ({file_size}B) in {path.name}"
-        )
+        raise VerifyError(f"mp4 atoms ({total}B) do not cover file ({file_size}B) in {path.name}")
 
 
 def sha256_of(path: Path) -> str:

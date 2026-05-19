@@ -17,9 +17,7 @@ def _suffix(filename: str) -> str:
     return Path(filename).suffix or ".bin"
 
 
-def fetch_item(
-    item: CatalogItem, client: ICloudPhotos, *, scratch_dir: Path
-) -> DownloadedFiles:
+def fetch_item(item: CatalogItem, client: ICloudPhotos, *, scratch_dir: Path) -> DownloadedFiles:
     """Download original + (optional) live photo + (optional) edited to scratch_dir.
 
     On any error, partial files are removed before re-raising as DownloadError.

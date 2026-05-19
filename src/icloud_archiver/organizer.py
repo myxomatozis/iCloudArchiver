@@ -49,10 +49,7 @@ def _primary_folder(item: CatalogItem, archive_root: Path) -> Path:
     if item.albums:
         return archive_root / item.albums[0]
     return (
-        archive_root
-        / "_NoAlbum"
-        / f"{item.created_at.year:04d}"
-        / f"{item.created_at.month:02d}"
+        archive_root / "_NoAlbum" / f"{item.created_at.year:04d}" / f"{item.created_at.month:02d}"
     )
 
 
