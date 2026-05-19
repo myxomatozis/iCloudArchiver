@@ -22,6 +22,11 @@ from icloud_archiver.config import parse_size, state_dir
         ("1MiB", 1024 * 1024),
         ("1GiB", 1024 ** 3),
         ("1TiB", 1024 ** 4),
+        ("1B", 1),
+        ("1b", 1),
+        ("0", 0),
+        ("0B", 0),
+        ("1.0KB", 1_000),
     ],
 )
 def test_parse_size_valid(raw: str, expected: int) -> None:

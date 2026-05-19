@@ -20,9 +20,15 @@ _SIZE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([A-Za-z]*)\s*$")
 def parse_size(raw: str) -> int:
     """Parse a human-readable size like '1TB', '500GB', '1.5TiB' to a byte count.
 
-    Decimal units (KB/MB/GB/TB) use powers of 1000.
-    Binary units (KiB/MiB/GiB/TiB) use powers of 1024.
-    Bare numbers are treated as bytes.
+    Accepted forms:
+      - Bare integer or decimal number, treated as bytes ("1024" → 1024).
+      - `B` suffix for bytes ("1B" → 1). Case-insensitive.
+      - Decimal SI units `KB`/`MB`/`GB`/`TB` (powers of 1000). Case-insensitive.
+      - Binary IEC units `KiB`/`MiB`/`GiB`/`TiB` (powers of 1024). Case-insensitive.
+      - Surrounding whitespace tolerated.
+
+    Fractional inputs are truncated toward zero after multiplication (this
+    matches the "threshold must not be exceeded" semantics used by the CLI).
     """
     if not raw or not raw.strip():
         raise ValueError(f"empty size string: {raw!r}")
@@ -37,7 +43,7 @@ def parse_size(raw: str) -> int:
 
 
 def state_dir() -> Path:
-    """Return the per-user state directory, creating subdirs on first call."""
+    """Return the per-user state directory, ensuring the standard subdirs exist."""
     base = Path.home() / ".icloud-archiver"
     base.mkdir(parents=True, exist_ok=True)
     (base / "cookies").mkdir(exist_ok=True)
