@@ -1,5 +1,4 @@
 from datetime import UTC, datetime
-from typing import ClassVar
 
 from icloud_archiver.catalog import _normalize_albums, _photo_to_catalog_item
 
@@ -21,9 +20,7 @@ def test_photo_to_catalog_item_maps_required_fields() -> None:
         size = 12345
         created = datetime(2014, 8, 23, 15, 42, 1, tzinfo=UTC)
         item_type = "image"
-        live_photo_size = 99
-        # no 'edited' key
-        versions: ClassVar[dict[str, dict[str, object]]] = {"original": {}, "medium": {}}
+        is_live_photo = True  # pyicloud 2.x bool flag
 
         @property
         def albums(self) -> list[str]:

@@ -1,4 +1,4 @@
-"""Apple ID login wrapping pyicloud-ipd, with cookie + keychain persistence."""
+"""Apple ID login wrapping pyicloud, with cookie + keychain persistence."""
 
 import contextlib
 import getpass
@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import keyring
-from pyicloud_ipd import PyiCloudService as _PyiCloudService  # type: ignore[import-untyped]
+from pyicloud import PyiCloudService as _PyiCloudService  # type: ignore[import-untyped]
 
 _KEYCHAIN_SERVICE = "icloud-archiver"
 _MAX_2FA_TRIES = 3
@@ -35,20 +35,48 @@ def interactive_login(cookie_dir: Path) -> None:
     password = getpass.getpass("Apple ID password: ")
     service = _PyiCloudService(email, password, cookie_directory=str(cookie_dir))
 
-    if getattr(service, "requires_2sa", False):
-        devices = getattr(service, "trusted_devices", [])
-        if not devices:
-            raise AuthError("2FA required but no trusted devices listed.")
-        device = devices[0]
-        if not service.send_verification_code(device):
-            raise AuthError("Failed to send 2FA code.")
+    # Modern HSA2: a 6-digit code is pushed to the user's trusted Apple device / SMS.
+    if getattr(service, "requires_2fa", False):
+        delivered = service.request_2fa_code()
+        if not delivered:
+            raise AuthError(
+                "2FA is required but Apple could not deliver a code automatically "
+                "(security key accounts are not supported). "
+                "Try logging in via iCloud.com first."
+            )
+        method = getattr(service, "two_factor_delivery_method", "unknown")
+        notice = getattr(service, "two_factor_delivery_notice", None)
+        if method == "trusted_device":
+            print("A verification code has been sent to your trusted Apple device(s).")
+        elif method == "sms":
+            print("A verification code has been sent via SMS to your trusted phone number.")
+        else:
+            print("A verification code has been sent.")
+        if notice:
+            print(f"  Note: {notice}")
         for attempt in range(_MAX_2FA_TRIES):
-            code = input("2FA code (6 digits): ").strip()
-            if service.validate_verification_code(device, code):
+            code = input("Two-factor code: ").strip()
+            if service.validate_2fa_code(code):
                 break
             print(f"  code rejected ({_MAX_2FA_TRIES - attempt - 1} retries left)")
         else:
             raise AuthError("2FA verification failed.")
+
+    # Legacy HSA1: must pick a trusted device and request a code be sent there.
+    elif getattr(service, "requires_2sa", False):
+        devices = getattr(service, "trusted_devices", [])
+        if not devices:
+            raise AuthError("2SA required but no trusted devices listed.")
+        device = devices[0]
+        if not service.send_verification_code(device):
+            raise AuthError("Failed to send 2SA code.")
+        for attempt in range(_MAX_2FA_TRIES):
+            code = input("2SA code (6 digits): ").strip()
+            if service.validate_verification_code(device, code):
+                break
+            print(f"  code rejected ({_MAX_2FA_TRIES - attempt - 1} retries left)")
+        else:
+            raise AuthError("2SA verification failed.")
 
     keyring.set_password(_KEYCHAIN_SERVICE, email, password)
     _enforce_cookie_perms(cookie_dir)
