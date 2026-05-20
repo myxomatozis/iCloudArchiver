@@ -71,6 +71,7 @@ def test_plan_writes_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(cli_mod, "list_external_drives", lambda: [drive])
     monkeypatch.setattr(cli_mod, "pick_drive_interactive", lambda _drives: drive)
+    monkeypatch.setattr(cli_mod, "internal_drive", _fake_internal_drive)
     monkeypatch.setattr("builtins.input", lambda _p="": "iCloud-Archive")
 
     fake_assets = [
@@ -156,6 +157,7 @@ def test_run_from_plan_skips_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     drive = _make_drive(tmp_path)
     monkeypatch.setattr(cli_mod, "list_external_drives", lambda: [drive])
     monkeypatch.setattr(cli_mod, "pick_drive_interactive", lambda _drives: drive)
+    monkeypatch.setattr(cli_mod, "internal_drive", _fake_internal_drive)
     monkeypatch.setattr("builtins.input", lambda _p="": "iCloud-Archive")
     monkeypatch.setattr(cli_mod, "_state_path", lambda: tmp_path / "state.db")
 
@@ -287,3 +289,76 @@ class _NullSleepBlock:
 
     def terminate(self) -> None:
         pass
+
+
+def test_interactive_picker_external_uses_subdir_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mnt = tmp_path / "mnt"
+    mnt.mkdir()
+    external = Drive(
+        device_id="disk4s2",
+        volume_name="T7",
+        mount_point=mnt,
+        fs="apfs",
+        free_bytes=10**12,
+        total_bytes=2 * 10**12,
+        is_external=True,
+    )
+    monkeypatch.setattr(cli_mod, "list_external_drives", lambda: [external])
+    monkeypatch.setattr(cli_mod, "internal_drive", _fake_internal_drive)
+    monkeypatch.setattr(cli_mod, "pick_drive_interactive", lambda _drives: external)
+    monkeypatch.setattr("builtins.input", lambda _p="": "iCloud-Archive")
+
+    archive_root, drive = cli_mod._interactive_picker()
+
+    assert archive_root == mnt / "iCloud-Archive"
+    assert archive_root.is_dir()
+    assert drive.is_external is True
+
+
+def test_interactive_picker_internal_prompts_absolute_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    internal = _fake_internal_drive()
+    monkeypatch.setattr(cli_mod, "list_external_drives", lambda: [])
+    monkeypatch.setattr(cli_mod, "internal_drive", lambda: internal)
+    monkeypatch.setattr(cli_mod, "pick_drive_interactive", lambda _drives: internal)
+    target = tmp_path / "MyArchive"
+    monkeypatch.setattr("builtins.input", lambda _p="": str(target))
+
+    archive_root, drive = cli_mod._interactive_picker()
+
+    assert archive_root == target
+    assert archive_root.is_dir()
+    assert drive.is_external is False
+
+
+def test_interactive_picker_internal_expands_tilde(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    internal = _fake_internal_drive()
+    monkeypatch.setattr(cli_mod, "list_external_drives", lambda: [])
+    monkeypatch.setattr(cli_mod, "internal_drive", lambda: internal)
+    monkeypatch.setattr(cli_mod, "pick_drive_interactive", lambda _drives: internal)
+    monkeypatch.setattr("builtins.input", lambda _p="": "~/Archive")
+
+    archive_root, _drive = cli_mod._interactive_picker()
+
+    assert archive_root == tmp_path / "Archive"
+
+
+def test_interactive_picker_internal_reprompts_on_relative_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    internal = _fake_internal_drive()
+    monkeypatch.setattr(cli_mod, "list_external_drives", lambda: [])
+    monkeypatch.setattr(cli_mod, "internal_drive", lambda: internal)
+    monkeypatch.setattr(cli_mod, "pick_drive_interactive", lambda _drives: internal)
+    answers = iter(["relative/path", str(tmp_path / "Good")])
+    monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
+
+    archive_root, _drive = cli_mod._interactive_picker()
+
+    assert archive_root == tmp_path / "Good"

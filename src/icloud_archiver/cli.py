@@ -64,12 +64,23 @@ def _build_client() -> ICloudPhotos:
     return RealICloudPhotos(svc)
 
 
+def _prompt_local_archive_path() -> Path:
+    """Prompt for an absolute local archive path, expanding a leading ``~``."""
+    while True:
+        raw = input("Local archive path (absolute, ~ allowed): ").strip()
+        if not raw:
+            click.echo("  path required")
+            continue
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            click.echo(f"  not an absolute path: {raw}")
+            continue
+        return path
+
+
 def _interactive_picker() -> tuple[Path, Any]:
     """Return (archive_root, drive). Handles reformat prompt if needed."""
-    drives = list_external_drives()
-    if not drives:
-        click.echo("No external drives mounted. Plug one in and try again.", err=True)
-        raise SystemExit(1)
+    drives = [*list_external_drives(), internal_drive()]
     drive = pick_drive_interactive(drives)
 
     if needs_reformat(drive.fs):
@@ -84,9 +95,12 @@ def _interactive_picker() -> tuple[Path, Any]:
             raise SystemExit(1)
         drive = new_drive
 
-    prompt = f"Archive subdirectory name on '{drive.volume_name}' [default: iCloud-Archive]: "
-    subdir = input(prompt).strip() or "iCloud-Archive"
-    archive_root = drive.mount_point / subdir
+    if drive.is_external:
+        prompt = f"Archive subdirectory name on '{drive.volume_name}' [default: iCloud-Archive]: "
+        subdir = input(prompt).strip() or "iCloud-Archive"
+        archive_root = drive.mount_point / subdir
+    else:
+        archive_root = _prompt_local_archive_path()
     archive_root.mkdir(parents=True, exist_ok=True)
     return archive_root, drive
 
