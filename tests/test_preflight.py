@@ -205,6 +205,7 @@ def test_internal_drive_reports_non_external(monkeypatch: pytest.MonkeyPatch) ->
     assert drive.free_bytes == 400_000_000_000
     assert drive.total_bytes == 1_000_000_000_000
     assert drive.mount_point == Path("/")
+    assert drive.device_id == "disk3s1"
 
 
 def test_render_table_labels_internal_volume() -> None:

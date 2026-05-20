@@ -6,6 +6,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 _REFORMAT_FS = frozenset({"exfat", "msdos", "fat32", "ntfs", "msdos_fat32"})
 
@@ -25,15 +26,19 @@ def needs_reformat(fs: str) -> bool:
     return fs.lower().replace(" ", "_") in _REFORMAT_FS
 
 
-def detect_filesystem(mount_point: Path) -> str:
-    """Run `diskutil info -plist <mount>` and pull `FilesystemType`."""
+def _disk_info(mount_point: Path) -> dict[str, Any]:
+    """Run `diskutil info -plist <mount>` and return the parsed plist dict."""
     res = subprocess.run(
         ["diskutil", "info", "-plist", str(mount_point)],
         capture_output=True,
         check=True,
     )
-    data = plistlib.loads(res.stdout)
-    return str(data.get("FilesystemType", "")).lower()
+    return plistlib.loads(res.stdout)  # type: ignore[no-any-return]
+
+
+def detect_filesystem(mount_point: Path) -> str:
+    """Run `diskutil info -plist <mount>` and pull `FilesystemType`."""
+    return str(_disk_info(mount_point).get("FilesystemType", "")).lower()
 
 
 def _volume_stats(mount_point: Path) -> tuple[int, int]:
@@ -102,12 +107,7 @@ def internal_drive() -> Drive:
     `~` actually lives. The archive path for the internal volume is prompted
     separately, so `mount_point` (`/`) is not used as the archive base.
     """
-    res = subprocess.run(
-        ["diskutil", "info", "-plist", "/"],
-        capture_output=True,
-        check=True,
-    )
-    info = plistlib.loads(res.stdout)
+    info = _disk_info(Path("/"))
     free, total = _volume_stats(Path.home())
     return Drive(
         device_id=str(info.get("DeviceIdentifier", "")),
