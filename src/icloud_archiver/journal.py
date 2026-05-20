@@ -332,6 +332,19 @@ class Journal:
         ).fetchall()
         return {r["state"]: int(r["n"]) for r in rows}
 
+    def reset_items(self, asset_ids: list[str]) -> int:
+        """Delete journal rows for *asset_ids* so they are treated as new again.
+
+        Cascades to item_events. Touches only the journal — not iCloud. Returns
+        the number of items actually removed (unknown ids are silently ignored).
+        """
+        removed = 0
+        for asset_id in asset_ids:
+            cur = self._conn.execute("DELETE FROM items WHERE asset_id = ?", (asset_id,))
+            removed += cur.rowcount
+        self._conn.commit()
+        return removed
+
     def asset_ids_in_state(self, state: ItemState) -> list[str]:
         rows = self._conn.execute(
             "SELECT asset_id FROM items WHERE state = ?", (state.value,)

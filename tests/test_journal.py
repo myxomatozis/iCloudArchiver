@@ -98,6 +98,25 @@ def test_resumable_items_returns_only_non_terminal(tmp_path: Path) -> None:
     journal.close()
 
 
+def test_reset_items_removes_rows_and_events(tmp_path: Path) -> None:
+    """reset_items deletes item rows (and their events) so the assets are
+    treated as new again; it returns the count actually removed."""
+    journal = Journal.open(tmp_path / "state.db")
+    run_id = journal.start_run(target_bytes=10_000, dry_run=False, archive_root="/Volumes/X")
+    a, b = _make_item("a"), _make_item("b")
+    journal.upsert_item(a, run_id, ItemState.PLANNED)
+    journal.upsert_item(b, run_id, ItemState.PLANNED)
+    journal.transition("a", ItemState.DELETED, run_id=run_id)
+
+    removed = journal.reset_items(["a", "never-seen"])
+
+    assert removed == 1
+    assert journal.get_state("a") is None
+    assert journal.events_for("a") == []
+    assert journal.get_state("b") == ItemState.PLANNED
+    journal.close()
+
+
 def test_bytes_freed_total(tmp_path: Path) -> None:
     journal = Journal.open(tmp_path / "state.db")
     run_id = journal.start_run(target_bytes=10_000, dry_run=False, archive_root="/Volumes/X")

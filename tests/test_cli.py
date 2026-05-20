@@ -16,7 +16,7 @@ def test_help_lists_subcommands() -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["--help"])
     assert result.exit_code == 0
-    for cmd in ("login", "disks", "plan", "run", "status", "empty-trash"):
+    for cmd in ("login", "disks", "plan", "run", "status", "empty-trash", "reset"):
         assert cmd in result.output
 
 
@@ -186,6 +186,86 @@ def test_run_from_plan_skips_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert result.exit_code == 0, result.output
     assert scanned == [], "iter_oldest_first should NOT have been called when --from-plan is used"
     assert "skipping icloud scan" in result.output.lower()
+
+
+def _seed_journal(db_path: Path) -> None:
+    """Journal with one PLANNED item ('keep') and two DELETED items ('d1','d2')."""
+    from icloud_archiver.journal import Journal as _Journal
+    from icloud_archiver.types import ItemState
+
+    j = _Journal.open(db_path)
+    run_id = j.start_run(target_bytes=1, dry_run=False, archive_root="/x")
+    for aid in ("keep", "d1", "d2"):
+        j.upsert_item(_make_fake_asset(aid).item, run_id, ItemState.PLANNED)
+    j.transition("d1", ItemState.DELETED, run_id=run_id)
+    j.transition("d2", ItemState.DELETED, run_id=run_id)
+    j.close()
+
+
+def test_reset_requires_a_target() -> None:
+    """reset with neither asset IDs nor --all-deleted is a usage error."""
+    result = CliRunner().invoke(main, ["reset"])
+    assert result.exit_code != 0
+    assert "all-deleted" in result.output.lower()
+
+
+def test_reset_clears_specified_assets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """reset <asset_id> removes only that item's journal row."""
+    from icloud_archiver.journal import Journal as _Journal
+    from icloud_archiver.types import ItemState
+
+    monkeypatch.setattr(cli_mod, "_state_path", lambda: tmp_path / "state.db")
+    _seed_journal(tmp_path / "state.db")
+
+    result = CliRunner().invoke(main, ["reset", "d1"])
+    assert result.exit_code == 0, result.output
+
+    j = _Journal.open(tmp_path / "state.db")
+    assert j.get_state("d1") is None
+    assert j.get_state("d2") == ItemState.DELETED
+    assert j.get_state("keep") == ItemState.PLANNED
+    j.close()
+
+
+def test_reset_all_deleted_clears_deleted_items(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """reset --all-deleted clears every DELETED item after confirmation."""
+    from icloud_archiver.journal import Journal as _Journal
+    from icloud_archiver.types import ItemState
+
+    monkeypatch.setattr(cli_mod, "_state_path", lambda: tmp_path / "state.db")
+    monkeypatch.setattr("builtins.input", lambda _p="": "RESET")
+    _seed_journal(tmp_path / "state.db")
+
+    result = CliRunner().invoke(main, ["reset", "--all-deleted"])
+    assert result.exit_code == 0, result.output
+
+    j = _Journal.open(tmp_path / "state.db")
+    assert j.get_state("d1") is None
+    assert j.get_state("d2") is None
+    assert j.get_state("keep") == ItemState.PLANNED
+    j.close()
+
+
+def test_reset_all_deleted_aborts_without_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A wrong confirmation token leaves the journal untouched."""
+    from icloud_archiver.journal import Journal as _Journal
+    from icloud_archiver.types import ItemState
+
+    monkeypatch.setattr(cli_mod, "_state_path", lambda: tmp_path / "state.db")
+    monkeypatch.setattr("builtins.input", lambda _p="": "no")
+    _seed_journal(tmp_path / "state.db")
+
+    result = CliRunner().invoke(main, ["reset", "--all-deleted"])
+    assert result.exit_code == 0, result.output
+
+    j = _Journal.open(tmp_path / "state.db")
+    assert j.get_state("d1") == ItemState.DELETED
+    assert j.get_state("d2") == ItemState.DELETED
+    j.close()
 
 
 class _NullSleepBlock:

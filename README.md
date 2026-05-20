@@ -80,6 +80,25 @@ uv run icloud-archiver status
 Shows items by state and the last few runs. Any non-terminal items will be
 picked up automatically by the next `run` invocation.
 
+## Re-archiving restored photos
+
+Once an item is archived its journal state becomes `DELETED`, and the selector
+skips it on every later run — even if you restore that photo in iCloud. To make
+the archiver consider it again, clear its journal state with `reset`:
+
+```bash
+# Reset specific photos by asset ID
+uv run icloud-archiver reset <asset_id> [<asset_id> ...]
+
+# Reset every item currently in the DELETED state (typed confirmation)
+uv run icloud-archiver reset --all-deleted
+```
+
+`reset` edits only the local journal (`state.db`) — it does **not** touch
+iCloud. Restore the photos in iCloud yourself first; then `reset` lets the next
+`run` pick them up, which will re-download, re-verify and **re-delete** them
+from iCloud.
+
 ## Develop
 
 ```bash

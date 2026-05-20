@@ -273,5 +273,46 @@ def empty_trash() -> None:
     click.echo(f"Empty-trash issued for {len(deleted_ids)} assets.")
 
 
+@main.command()
+@click.argument("asset_ids", nargs=-1)
+@click.option(
+    "--all-deleted",
+    is_flag=True,
+    help="Reset every item currently in the DELETED state.",
+)
+def reset(asset_ids: tuple[str, ...], all_deleted: bool) -> None:
+    """Clear journal state for archived items so they can be re-archived.
+
+    Use this after restoring photos in iCloud. It edits only the local journal
+    (state.db) — it does NOT touch iCloud. After a reset the next `run` will
+    re-download, re-verify and re-delete those photos from iCloud.
+
+    Pass one or more ASSET_IDS, or use --all-deleted (not both).
+    """
+    if bool(asset_ids) == all_deleted:
+        raise click.UsageError("provide either ASSET_IDS or --all-deleted (not both)")
+
+    with Journal.open(_state_path()) as journal:
+        if all_deleted:
+            targets = journal.asset_ids_in_state(ItemState.DELETED)
+            if not targets:
+                click.echo("Nothing to reset — no items in DELETED state.")
+                return
+            click.echo(
+                f"This will reset {len(targets)} DELETED item(s). The next `run` will "
+                "re-download and re-delete them from iCloud."
+            )
+            if input("Type 'RESET' to confirm: ").strip() != "RESET":
+                click.echo("Aborted.")
+                return
+        else:
+            targets = list(asset_ids)
+        removed = journal.reset_items(targets)
+
+    click.echo(f"Reset {removed} item(s). Re-run `run` to archive them again.")
+    if not all_deleted and removed < len(targets):
+        click.echo(f"({len(targets) - removed} of the given IDs were not in the journal.)")
+
+
 if __name__ == "__main__":
     main()
