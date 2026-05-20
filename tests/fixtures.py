@@ -48,3 +48,12 @@ def make_broken_mp4(path: Path) -> Path:
     mdat = _atom(b"mdat", b"\x00" * 64)
     path.write_bytes(ftyp + mdat)  # no moov
     return path
+
+
+def make_eof_box_mp4(path: Path) -> Path:
+    """A valid MP4 whose final mdat box uses size==0 (extends to EOF per ISO 14496-12)."""
+    ftyp = _atom(b"ftyp", b"isom\x00\x00\x02\x00" + b"isomiso2avc1mp41")
+    moov = _atom(b"moov", b"")
+    mdat = struct.pack(">I", 0) + b"mdat" + b"\x00" * 64
+    path.write_bytes(ftyp + moov + mdat)
+    return path

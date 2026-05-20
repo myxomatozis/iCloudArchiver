@@ -78,6 +78,27 @@ def test_interactive_login_writes_cookie_and_keychain(
     assert kept_passwords["icloud-archiver:test@example.com"] == "hunter2"
 
 
+def test_interactive_login_returns_authenticated_email(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """interactive_login returns the email it authenticated with, so the caller
+    never has to re-prompt for it."""
+    cookie_dir = tmp_path / "cookies"
+    cookie_dir.mkdir()
+
+    monkeypatch.setattr("builtins.input", lambda _p="": "person@example.com")
+    monkeypatch.setattr("getpass.getpass", lambda _p="": "hunter2")
+    monkeypatch.setattr(
+        "icloud_archiver.auth._PyiCloudService", lambda *_a, **_kw: _FakePyiCloudService()
+    )
+    monkeypatch.setattr("icloud_archiver.auth.keyring.set_password", lambda *_a: None)
+
+    result = interactive_login(cookie_dir)
+
+    assert result == "person@example.com"
+
+
 def test_load_session_returns_service_when_valid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

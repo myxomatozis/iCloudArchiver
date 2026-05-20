@@ -13,6 +13,7 @@ from icloud_archiver.verifier import (
 )
 from tests.fixtures import (
     make_broken_mp4,
+    make_eof_box_mp4,
     make_jpeg,
     make_minimal_mp4,
     make_png,
@@ -64,6 +65,12 @@ def test_verify_parse_png_passes(tmp_path: Path) -> None:
 
 def test_verify_parse_mp4_passes(tmp_path: Path) -> None:
     p = make_minimal_mp4(tmp_path / "a.mp4")
+    verify_parse(p, mime_type="video/mp4")
+
+
+def test_verify_parse_mp4_eof_box_passes(tmp_path: Path) -> None:
+    """A box with size==0 extends to EOF (ISO 14496-12) and must be accepted."""
+    p = make_eof_box_mp4(tmp_path / "a.mp4")
     verify_parse(p, mime_type="video/mp4")
 
 

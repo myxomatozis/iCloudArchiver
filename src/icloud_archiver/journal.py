@@ -96,6 +96,12 @@ class Journal:
     def close(self) -> None:
         self._conn.close()
 
+    def __enter__(self) -> "Journal":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
     # --- runs ---
 
     def start_run(self, *, target_bytes: int, dry_run: bool, archive_root: str) -> str:
@@ -218,8 +224,15 @@ class Journal:
         ).fetchone()
         return ItemState(row["state"]) if row else None
 
+    def get_primary_path(self, asset_id: str) -> str | None:
+        """Return the archived primary file path, or None if unset/unknown."""
+        row = self._conn.execute(
+            "SELECT primary_path FROM items WHERE asset_id = ?", (asset_id,)
+        ).fetchone()
+        return row["primary_path"] if row else None
+
     def is_terminal(self, asset_id: str) -> bool:
-        """True iff the asset is in a terminal state (DELETED/SKIPPED/FAILED_VERIFY).
+        """True iff the asset is in a terminal state (see ItemState._TERMINAL_STATES).
 
         Returns False for unknown asset_ids — selector should treat them as 'new'.
         Returns False for non-terminal known states (PLANNED/.../DELETING) so the

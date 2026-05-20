@@ -22,7 +22,12 @@ def test_catalog_item_is_frozen():
 
 
 def test_item_state_terminal_set():
-    expected_terminal = {ItemState.DELETED, ItemState.SKIPPED, ItemState.FAILED_VERIFY}
+    expected_terminal = {
+        ItemState.DELETED,
+        ItemState.SKIPPED,
+        ItemState.FAILED_VERIFY,
+        ItemState.FAILED_DOWNLOAD,
+    }
     for state in ItemState:
         assert state.is_terminal() == (state in expected_terminal), state
 

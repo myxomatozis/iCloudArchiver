@@ -20,6 +20,21 @@ def test_help_lists_subcommands() -> None:
         assert cmd in result.output
 
 
+def test_login_saves_authenticated_email(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`login` persists the email interactive_login authenticated with, not a
+    separately re-typed value."""
+    monkeypatch.setattr(cli_mod, "state_dir", lambda: tmp_path)
+    monkeypatch.setattr(cli_mod, "interactive_login", lambda _cookie_dir: "auth@example.com")
+    saved: dict[str, str] = {}
+    monkeypatch.setattr(cli_mod, "_save_email", lambda e: saved.__setitem__("email", e))
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["login"])
+
+    assert result.exit_code == 0, result.output
+    assert saved["email"] == "auth@example.com"
+
+
 def test_disks_subcommand_runs_without_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli_mod, "list_external_drives", lambda: [])
     runner = CliRunner()

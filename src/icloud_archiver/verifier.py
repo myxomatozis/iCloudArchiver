@@ -75,6 +75,12 @@ def _walk_mp4_atoms(path: Path) -> None:
                 header_len = 16
             else:
                 header_len = 8
+            if size == 0:
+                # size==0 → box extends to end of file (ISO 14496-12 §4.2).
+                box_start = f.tell() - header_len
+                seen.add(box_type.decode("ascii", errors="replace"))
+                total += file_size - box_start
+                break
             if size < header_len:
                 raise VerifyError(f"mp4 invalid box size {size} in {path.name}")
             seen.add(box_type.decode("ascii", errors="replace"))

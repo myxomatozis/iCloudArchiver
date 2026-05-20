@@ -1,5 +1,6 @@
 """Place verified files into album folders, with hardlinks for multi-album items."""
 
+import hashlib
 import json
 import os
 import shutil
@@ -9,6 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from icloud_archiver.types import CatalogItem
+from icloud_archiver.verifier import sha256_of
+
+
+class OrganizeError(Exception):
+    """Raised when files cannot be placed safely (e.g. an unresolved collision)."""
 
 
 @dataclass(frozen=True)
@@ -57,32 +63,54 @@ def _additional_folders(item: CatalogItem, archive_root: Path) -> list[Path]:
     return [archive_root / a for a in item.albums[1:]]
 
 
-def _move_or_skip(src: Path, dest: Path) -> None:
-    """Move src → dest. If dest already exists, drop src (idempotent re-run)."""
+def _disambiguator(asset_id: str) -> str:
+    """A short, filesystem-safe token unique to an asset, for qualifying names."""
+    return hashlib.sha1(asset_id.encode("utf-8")).hexdigest()[:10]
+
+
+def _resolve_name(item: CatalogItem, target_dirs: list[Path], *, src_sha: str) -> str:
+    """Pick the on-disk filename for this asset.
+
+    Uses ``original_filename`` unless it already exists — with *different*
+    content — in any target folder. iCloud filenames are not unique, so a
+    distinct asset sharing the name would otherwise overwrite or be dropped;
+    in that case the name is qualified with an asset-derived token.
+    """
+    candidate = item.original_filename
+    for folder in target_dirs:
+        existing = folder / candidate
+        if existing.exists() and sha256_of(existing) != src_sha:
+            p = Path(candidate)
+            return f"{p.stem}__{_disambiguator(item.asset_id)}{p.suffix}"
+    return candidate
+
+
+def _place_file(src: Path, dest: Path, *, src_sha: str) -> None:
+    """Move src → dest. If dest exists it must be byte-identical to src (an
+    idempotent re-run); a content mismatch is an unresolved collision and
+    raises rather than silently discarding either file."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
+        if sha256_of(dest) != src_sha:
+            raise OrganizeError(
+                f"{dest} already exists with different content; refusing to overwrite"
+            )
         if src.exists():
             src.unlink()
         return
     shutil.move(str(src), str(dest))
 
 
-def _hardlink_or_skip(src: Path, dest: Path) -> None:
+def _hardlink(src: Path, dest: Path, *, src_sha: str) -> None:
+    """Hardlink src → dest. If dest exists it must already hold src's content."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
-        # Already in place (idempotent); if it's a different inode, leave the
-        # existing file alone — divergence will surface in caller's journal.
+        if sha256_of(dest) != src_sha:
+            raise OrganizeError(
+                f"{dest} already exists with different content; refusing to hardlink over it"
+            )
         return
     os.link(src, dest)
-
-
-def _live_photo_name(original_filename: str) -> str:
-    return f"{Path(original_filename).stem}_LIVE.MOV"
-
-
-def _edited_name(original_filename: str) -> str:
-    p = Path(original_filename)
-    return f"{p.stem}_EDITED{p.suffix}"
 
 
 def organize(
@@ -93,37 +121,47 @@ def organize(
     sidecar: dict[str, Any],
 ) -> OrganizedPaths:
     primary_dir = _primary_folder(item, archive_root)
-    primary_dir.mkdir(parents=True, exist_ok=True)
+    additional_dirs = _additional_folders(item, archive_root)
 
-    primary = primary_dir / item.original_filename
-    _move_or_skip(files.original, primary)
+    src_sha = sha256_of(files.original)
+    name = _resolve_name(item, [primary_dir, *additional_dirs], src_sha=src_sha)
+    stem, suffix = Path(name).stem, Path(name).suffix
+
+    primary_dir.mkdir(parents=True, exist_ok=True)
+    primary = primary_dir / name
+    _place_file(files.original, primary, src_sha=src_sha)
 
     live_primary: Path | None = None
+    live_sha = ""
     if files.live_photo is not None:
-        live_primary = primary_dir / _live_photo_name(item.original_filename)
-        _move_or_skip(files.live_photo, live_primary)
+        live_sha = sha256_of(files.live_photo)
+        live_primary = primary_dir / f"{stem}_LIVE.MOV"
+        _place_file(files.live_photo, live_primary, src_sha=live_sha)
 
     edited_primary: Path | None = None
+    edited_sha = ""
     if files.edited is not None:
-        edited_primary = primary_dir / _edited_name(item.original_filename)
-        _move_or_skip(files.edited, edited_primary)
+        edited_sha = sha256_of(files.edited)
+        edited_primary = primary_dir / f"{stem}_EDITED{suffix}"
+        _place_file(files.edited, edited_primary, src_sha=edited_sha)
 
-    sidecar_primary = primary_dir / (Path(item.original_filename).stem + ".json")
+    sidecar_primary = primary_dir / f"{stem}.json"
     sidecar_primary.write_text(json.dumps(sidecar, indent=2, sort_keys=True))
+    sidecar_sha = sha256_of(sidecar_primary)
 
     hardlinks: list[Path] = []
     sidecar_hardlinks: list[Path] = []
-    for extra_dir in _additional_folders(item, archive_root):
+    for extra_dir in additional_dirs:
         extra_dir.mkdir(parents=True, exist_ok=True)
-        extra_primary = extra_dir / item.original_filename
-        _hardlink_or_skip(primary, extra_primary)
+        extra_primary = extra_dir / name
+        _hardlink(primary, extra_primary, src_sha=src_sha)
         hardlinks.append(extra_primary)
         if live_primary is not None:
-            _hardlink_or_skip(live_primary, extra_dir / live_primary.name)
+            _hardlink(live_primary, extra_dir / live_primary.name, src_sha=live_sha)
         if edited_primary is not None:
-            _hardlink_or_skip(edited_primary, extra_dir / edited_primary.name)
+            _hardlink(edited_primary, extra_dir / edited_primary.name, src_sha=edited_sha)
         extra_sidecar = extra_dir / sidecar_primary.name
-        _hardlink_or_skip(sidecar_primary, extra_sidecar)
+        _hardlink(sidecar_primary, extra_sidecar, src_sha=sidecar_sha)
         sidecar_hardlinks.append(extra_sidecar)
 
     # fsync primary directory so renames + sidecar are durable

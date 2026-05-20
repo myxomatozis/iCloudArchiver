@@ -98,9 +98,9 @@ def main() -> None:
 @main.command()
 def login() -> None:
     """Sign in to iCloud and persist a session cookie + keychain password."""
-    interactive_login(state_dir() / "cookies")
-    email = input("Confirm Apple ID email to remember for subsequent runs: ").strip()
+    email = interactive_login(state_dir() / "cookies")
     _save_email(email)
+    click.echo(f"Remembered {email} for subsequent runs.")
 
 
 @main.command()
@@ -126,14 +126,14 @@ def plan(target_freed: str) -> None:
     target_bytes = parse_size(target_freed)
     archive_root, _drive = _interactive_picker()
     client = _build_client()
-    journal = Journal.open(_state_path())
-    outcome = run_archival(
-        client=client,
-        journal=journal,
-        archive_root=archive_root,
-        target_bytes=target_bytes,
-        dry_run=True,
-    )
+    with Journal.open(_state_path()) as journal:
+        outcome = run_archival(
+            client=client,
+            journal=journal,
+            archive_root=archive_root,
+            target_bytes=target_bytes,
+            dry_run=True,
+        )
     md = render_plan_markdown(
         outcome.plan_rows, target_bytes=target_bytes, archive_root=str(archive_root)
     )
@@ -198,25 +198,27 @@ def run(target_freed: str | None, plan_file: Path | None) -> None:
 
     archive_root, _drive = _interactive_picker()
     client = _build_client()
-    journal = Journal.open(_state_path())
 
-    preselected = None
-    if plan_run_id is not None:
-        preselected = journal.items_for_run(plan_run_id)
-        click.echo(f"Loaded {len(preselected)} items from {plan_file_name} — skipping iCloud scan.")
+    with Journal.open(_state_path()) as journal:
+        preselected = None
+        if plan_run_id is not None:
+            preselected = journal.items_for_run(plan_run_id)
+            click.echo(
+                f"Loaded {len(preselected)} items from {plan_file_name} — skipping iCloud scan."
+            )
 
-    sleep_block = caffeinate_for_run()
-    try:
-        outcome = run_archival(
-            client=client,
-            journal=journal,
-            archive_root=archive_root,
-            target_bytes=target_bytes,
-            dry_run=False,
-            preselected=preselected,
-        )
-    finally:
-        sleep_block.terminate()
+        sleep_block = caffeinate_for_run()
+        try:
+            outcome = run_archival(
+                client=client,
+                journal=journal,
+                archive_root=archive_root,
+                target_bytes=target_bytes,
+                dry_run=False,
+                preselected=preselected,
+            )
+        finally:
+            sleep_block.terminate()
 
     click.echo(
         render_run_summary(
@@ -234,9 +236,9 @@ def run(target_freed: str | None, plan_file: Path | None) -> None:
 @main.command()
 def status() -> None:
     """Show journal stats: items by state, recent runs."""
-    journal = Journal.open(_state_path())
-    counts = journal.items_by_state()
-    runs = journal.list_runs()[:5]
+    with Journal.open(_state_path()) as journal:
+        counts = journal.items_by_state()
+        runs = journal.list_runs()[:5]
     click.echo("Items by state:")
     for state, n in sorted(counts.items()):
         click.echo(f"  {state:<18} {n}")
@@ -251,22 +253,22 @@ def status() -> None:
 @main.command("empty-trash")
 def empty_trash() -> None:
     """Permanently empty items archived by this tool from Recently Deleted."""
-    journal = Journal.open(_state_path())
-    counts = journal.items_by_state()
-    eligible = counts.get("DELETED", 0)
-    if eligible == 0:
-        click.echo("Nothing to empty — no items in DELETED state in the journal.")
-        return
-    click.echo(
-        f"Recently Deleted contains {eligible} items archived by this tool, "
-        "all with verified local copies."
-    )
-    confirm = input("Permanently empty Recently Deleted? Type 'EMPTY' to confirm: ").strip()
-    if confirm != "EMPTY":
-        click.echo("Aborted.")
-        return
-    client = _build_client()
-    deleted_ids = journal.asset_ids_in_state(ItemState.DELETED)
+    with Journal.open(_state_path()) as journal:
+        counts = journal.items_by_state()
+        eligible = counts.get("DELETED", 0)
+        if eligible == 0:
+            click.echo("Nothing to empty — no items in DELETED state in the journal.")
+            return
+        click.echo(
+            f"Recently Deleted contains {eligible} items archived by this tool, "
+            "all with verified local copies."
+        )
+        confirm = input("Permanently empty Recently Deleted? Type 'EMPTY' to confirm: ").strip()
+        if confirm != "EMPTY":
+            click.echo("Aborted.")
+            return
+        client = _build_client()
+        deleted_ids = journal.asset_ids_in_state(ItemState.DELETED)
     client.empty_trash(deleted_ids)
     click.echo(f"Empty-trash issued for {len(deleted_ids)} assets.")
 

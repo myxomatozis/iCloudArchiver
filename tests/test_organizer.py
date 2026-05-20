@@ -114,6 +114,75 @@ def test_organize_is_idempotent(tmp_path: Path) -> None:
     assert (archive / "A" / "IMG_1234.HEIC").stat().st_ino == primary_inode
 
 
+def test_distinct_assets_same_filename_same_album_do_not_collide(tmp_path: Path) -> None:
+    """Two different assets sharing original_filename in the same album must each
+    keep their own bytes — neither download may be silently dropped."""
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    scratch = tmp_path / ".scratch"
+    scratch.mkdir()
+
+    item_a = _item(asset_id="asset-a", original_filename="IMG_0001.HEIC", albums=["Trip"])
+    src_a = scratch / "asset-a_orig.HEIC"
+    src_a.write_bytes(b"AAAA-content")
+    paths_a = organize(
+        item_a,
+        DownloadedFiles(original=src_a),
+        archive,
+        sidecar=sidecar_dict(item_a, sha256="a" * 64, run_id="r1"),
+    )
+
+    item_b = _item(asset_id="asset-b", original_filename="IMG_0001.HEIC", albums=["Trip"])
+    src_b = scratch / "asset-b_orig.HEIC"
+    src_b.write_bytes(b"BBBB-different")
+    paths_b = organize(
+        item_b,
+        DownloadedFiles(original=src_b),
+        archive,
+        sidecar=sidecar_dict(item_b, sha256="b" * 64, run_id="r2"),
+    )
+
+    assert paths_a.primary != paths_b.primary
+    assert paths_a.primary.read_bytes() == b"AAAA-content"
+    assert paths_b.primary.read_bytes() == b"BBBB-different"
+
+
+def test_distinct_assets_same_filename_shared_secondary_album_do_not_collide(
+    tmp_path: Path,
+) -> None:
+    """A filename collision in a *secondary* (hardlinked) album must not drop data."""
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    scratch = tmp_path / ".scratch"
+    scratch.mkdir()
+
+    item_a = _item(asset_id="asset-a", original_filename="IMG_0002.HEIC", albums=["A1", "Shared"])
+    src_a = scratch / "asset-a_orig.HEIC"
+    src_a.write_bytes(b"AAAA")
+    paths_a = organize(
+        item_a,
+        DownloadedFiles(original=src_a),
+        archive,
+        sidecar=sidecar_dict(item_a, sha256="a" * 64, run_id="r1"),
+    )
+
+    item_b = _item(asset_id="asset-b", original_filename="IMG_0002.HEIC", albums=["B1", "Shared"])
+    src_b = scratch / "asset-b_orig.HEIC"
+    src_b.write_bytes(b"BBBB")
+    paths_b = organize(
+        item_b,
+        DownloadedFiles(original=src_b),
+        archive,
+        sidecar=sidecar_dict(item_b, sha256="b" * 64, run_id="r2"),
+    )
+
+    a_in_shared = next(p for p in paths_a.hardlinks if p.parent.name == "Shared")
+    b_in_shared = next(p for p in paths_b.hardlinks if p.parent.name == "Shared")
+    assert a_in_shared != b_in_shared
+    assert a_in_shared.read_bytes() == b"AAAA"
+    assert b_in_shared.read_bytes() == b"BBBB"
+
+
 def test_sidecar_dict_shape(tmp_path: Path) -> None:
     item = _item(albums=["A", "B"], has_live_photo=True)
     side = sidecar_dict(item, sha256="a" * 64, run_id="r1")

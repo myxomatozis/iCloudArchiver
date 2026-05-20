@@ -1,5 +1,8 @@
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+
+import pytest
 
 from icloud_archiver.journal import Journal
 from icloud_archiver.types import CatalogItem, ItemState, RunStatus
@@ -31,6 +34,14 @@ def test_open_creates_schema(tmp_path: Path) -> None:
     journal.close()
 
 
+def test_context_manager_closes_connection(tmp_path: Path) -> None:
+    """`with Journal.open(...)` closes the SQLite connection on exit."""
+    with Journal.open(tmp_path / "state.db") as journal:
+        journal.start_run(target_bytes=1, dry_run=False, archive_root="/x")
+    with pytest.raises(sqlite3.ProgrammingError):
+        journal._conn.execute("SELECT 1")
+
+
 def test_start_and_end_run(tmp_path: Path) -> None:
     journal = Journal.open(tmp_path / "state.db")
     run_id = journal.start_run(target_bytes=1_000_000, dry_run=False, archive_root="/Volumes/X")
@@ -57,6 +68,20 @@ def test_transition_records_event_and_updates_state(tmp_path: Path) -> None:
 
     events = journal.events_for(item.asset_id)
     assert [e["to_state"] for e in events] == ["PLANNED", "DOWNLOADING", "DOWNLOADED"]
+    journal.close()
+
+
+def test_get_primary_path_returns_stored_path(tmp_path: Path) -> None:
+    """get_primary_path returns the archived file path, or None before it is set."""
+    journal = Journal.open(tmp_path / "state.db")
+    run_id = journal.start_run(target_bytes=1, dry_run=False, archive_root="/x")
+    item = _make_item("a")
+    journal.upsert_item(item, run_id, ItemState.PLANNED)
+    assert journal.get_primary_path("a") is None
+    assert journal.get_primary_path("never-seen") is None
+
+    journal.transition("a", ItemState.ARCHIVED, run_id=run_id, primary_path="/archive/a.HEIC")
+    assert journal.get_primary_path("a") == "/archive/a.HEIC"
     journal.close()
 
 

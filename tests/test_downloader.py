@@ -1,3 +1,4 @@
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -57,6 +58,21 @@ def test_fetch_item_includes_edited(tmp_path: Path) -> None:
     fake = _fake_with(item, with_edits=True)
     files = fetch_item(item, fake, scratch_dir=tmp_path)
     assert files.edited is not None
+
+
+def test_fetch_item_fsyncs_each_download_before_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Original, live photo and edited file are each fsynced for crash durability."""
+    item = _item(has_live=True, has_edits=True)
+    fake = _fake_with(item, with_live=True, with_edits=True)
+
+    fsync_calls: list[int] = []
+    monkeypatch.setattr(os, "fsync", fsync_calls.append)
+
+    fetch_item(item, fake, scratch_dir=tmp_path)
+
+    assert len(fsync_calls) == 3
 
 
 def test_fetch_item_raises_on_download_failure(tmp_path: Path) -> None:

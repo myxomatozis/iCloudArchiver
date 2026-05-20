@@ -23,7 +23,14 @@ class ItemState(StrEnum):
         return self in _TERMINAL_STATES
 
 
-_TERMINAL_STATES = frozenset({ItemState.DELETED, ItemState.SKIPPED, ItemState.FAILED_VERIFY})
+_TERMINAL_STATES = frozenset(
+    {
+        ItemState.DELETED,
+        ItemState.SKIPPED,
+        ItemState.FAILED_VERIFY,
+        ItemState.FAILED_DOWNLOAD,
+    }
+)
 
 
 class RunStatus(StrEnum):

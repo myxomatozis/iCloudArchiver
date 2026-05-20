@@ -28,8 +28,12 @@ def _enforce_cookie_perms(cookie_dir: Path) -> None:
             os.chmod(p, stat.S_IRUSR | stat.S_IWUSR)
 
 
-def interactive_login(cookie_dir: Path) -> None:
-    """Prompt for Apple ID / password / 2FA. Persist cookie + keychain on success."""
+def interactive_login(cookie_dir: Path) -> str:
+    """Prompt for Apple ID / password / 2FA. Persist cookie + keychain on success.
+
+    Returns the authenticated Apple ID email so the caller can record it without
+    re-prompting.
+    """
     cookie_dir.mkdir(parents=True, exist_ok=True)
     email = input("Apple ID email: ").strip()
     password = getpass.getpass("Apple ID password: ")
@@ -81,6 +85,7 @@ def interactive_login(cookie_dir: Path) -> None:
     keyring.set_password(_KEYCHAIN_SERVICE, email, password)
     _enforce_cookie_perms(cookie_dir)
     print(f"Logged in as {email}. Session cookies stored in {cookie_dir}.")
+    return email
 
 
 def load_session(cookie_dir: Path, *, email: str) -> Any:

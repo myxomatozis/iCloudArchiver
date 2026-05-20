@@ -202,6 +202,85 @@ def test_resume_skips_already_deleted_items(tmp_path: Path) -> None:
     assert outcome2.deleted == 0
 
 
+def test_failed_download_not_retried_on_next_run(tmp_path: Path) -> None:
+    """An item that failed to download is terminal — it must not be re-selected,
+    even if the download would now succeed."""
+    assets = _assets(1)
+    _swap_to_jpeg(assets[0], tmp_path / "src.jpg")
+    asset_id = assets[0].item.asset_id
+
+    fake = FakeICloudPhotos(assets=assets)
+    fake.fail_download_for.add(asset_id)
+    journal = Journal.open(tmp_path / "state.db")
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+
+    outcome1 = run_archival(
+        client=fake,
+        journal=journal,
+        archive_root=archive_root,
+        target_bytes=10_000,
+        dry_run=False,
+    )
+    assert outcome1.failed_download == 1
+    assert journal.get_state(asset_id) == ItemState.FAILED_DOWNLOAD
+
+    # The download would now succeed, but the item must not be retried.
+    fake.fail_download_for.clear()
+    outcome2 = run_archival(
+        client=fake,
+        journal=journal,
+        archive_root=archive_root,
+        target_bytes=10_000,
+        dry_run=False,
+    )
+    assert outcome2.failed_download == 0
+    assert outcome2.archived == 0
+    assert outcome2.deleted == 0
+    assert journal.get_state(asset_id) == ItemState.FAILED_DOWNLOAD
+
+
+def test_organize_error_fails_item_without_crashing_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An OrganizeError for one item is contained: that item fails verification,
+    its iCloud copy is kept, and the rest of the run still completes."""
+    from icloud_archiver.organizer import OrganizeError
+
+    assets = _assets(2)
+    for a in assets:
+        _swap_to_jpeg(a, tmp_path / f"src_{a.item.asset_id}.jpg")
+    fake = FakeICloudPhotos(assets=assets)
+    journal = Journal.open(tmp_path / "state.db")
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+
+    real_organize = orch.organize
+    calls: list[str] = []
+
+    def flaky_organize(item, files, archive_root, *, sidecar):
+        calls.append(item.asset_id)
+        if len(calls) == 1:
+            raise OrganizeError("simulated unresolved collision")
+        return real_organize(item, files, archive_root, sidecar=sidecar)
+
+    monkeypatch.setattr(orch, "organize", flaky_organize)
+
+    outcome = run_archival(
+        client=fake,
+        journal=journal,
+        archive_root=archive_root,
+        target_bytes=10_000,
+        dry_run=False,
+    )
+
+    assert outcome.failed_verify == 1
+    assert outcome.deleted == 1
+    remaining = [i.asset_id for i in fake.iter_oldest_first()]
+    assert assets[0].item.asset_id in remaining
+    assert journal.get_state(assets[0].item.asset_id) == ItemState.FAILED_VERIFY
+
+
 def test_resume_archived_item_skips_to_delete(tmp_path: Path) -> None:
     """An item already ARCHIVED from a prior run should skip download/verify/organize."""
     assets = _assets(1)
@@ -213,14 +292,17 @@ def test_resume_archived_item_skips_to_delete(tmp_path: Path) -> None:
     archive_root = tmp_path / "archive"
     archive_root.mkdir()
 
-    # Simulate prior crashed run that reached ARCHIVED.
+    # Simulate prior crashed run that reached ARCHIVED, with the file on disk.
+    archived_file = archive_root / item.albums[0] / item.original_filename
+    archived_file.parent.mkdir(parents=True, exist_ok=True)
+    archived_file.write_bytes(b"archived-copy")
     prior_run = journal.start_run(target_bytes=1, dry_run=False, archive_root=str(archive_root))
     journal.upsert_item(item, prior_run, ItemState.PLANNED)
     journal.transition(item.asset_id, ItemState.DOWNLOADING, run_id=prior_run)
     journal.transition(item.asset_id, ItemState.DOWNLOADED, run_id=prior_run)
     journal.transition(item.asset_id, ItemState.VERIFIED, run_id=prior_run, sha256="x" * 64)
     journal.transition(
-        item.asset_id, ItemState.ARCHIVED, run_id=prior_run, primary_path="/fake/path"
+        item.asset_id, ItemState.ARCHIVED, run_id=prior_run, primary_path=str(archived_file)
     )
     journal.end_run(prior_run, RunStatus.CRASHED)
 
@@ -251,3 +333,40 @@ def test_resume_archived_item_skips_to_delete(tmp_path: Path) -> None:
     assert list(fake.iter_oldest_first()) == []
     # bytes_archived stays 0 in this run because the archive work was done previously
     assert outcome.bytes_archived == 0
+
+
+def test_resume_archived_skips_delete_when_file_missing(tmp_path: Path) -> None:
+    """If the journaled primary_path no longer exists on disk, the resume path
+    must NOT delete the iCloud copy — it transitions to FAILED_VERIFY instead."""
+    assets = _assets(1)
+    _swap_to_jpeg(assets[0], tmp_path / "src.jpg")
+    item = assets[0].item
+
+    fake = FakeICloudPhotos(assets=assets)
+    journal = Journal.open(tmp_path / "state.db")
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+
+    # Prior crashed run reached ARCHIVED, but the archived file is gone.
+    prior_run = journal.start_run(target_bytes=1, dry_run=False, archive_root=str(archive_root))
+    journal.upsert_item(item, prior_run, ItemState.PLANNED)
+    journal.transition(
+        item.asset_id,
+        ItemState.ARCHIVED,
+        run_id=prior_run,
+        primary_path=str(archive_root / "gone.jpg"),
+    )
+    journal.end_run(prior_run, RunStatus.CRASHED)
+
+    outcome = run_archival(
+        client=fake,
+        journal=journal,
+        archive_root=archive_root,
+        target_bytes=10_000,
+        dry_run=False,
+    )
+
+    assert outcome.deleted == 0
+    assert outcome.failed_verify == 1
+    assert item.asset_id in [i.asset_id for i in fake.iter_oldest_first()]
+    assert journal.get_state(item.asset_id) == ItemState.FAILED_VERIFY

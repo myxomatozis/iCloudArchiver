@@ -14,7 +14,7 @@ from icloud_archiver.deleter import DeleteError, delete_asset
 from icloud_archiver.downloader import DownloadError, fetch_item
 from icloud_archiver.icloud_iface import ICloudPhotos
 from icloud_archiver.journal import Journal
-from icloud_archiver.organizer import OrganizedPaths, organize, sidecar_dict
+from icloud_archiver.organizer import OrganizedPaths, OrganizeError, organize, sidecar_dict
 from icloud_archiver.reporting import PlanRow
 from icloud_archiver.selector import select_until
 from icloud_archiver.types import CatalogItem, ItemState, RunStatus
@@ -177,6 +177,19 @@ def _archive_one(
     # wipe scratch at run start.)
     prior = journal.get_state(item.asset_id)
     if prior in (ItemState.ARCHIVED, ItemState.DELETING):
+        # Guard against deleting the iCloud copy when the archived file is no
+        # longer on disk (drive unplugged, manual deletion, corruption between
+        # runs). Without this check the resume path would delete blindly.
+        primary_path = journal.get_primary_path(item.asset_id)
+        if primary_path is None or not Path(primary_path).exists():
+            journal.transition(
+                item.asset_id,
+                ItemState.FAILED_VERIFY,
+                run_id=run_id,
+                error=f"resume: archived file missing from disk ({primary_path}); skipped delete",
+            )
+            outcome.failed_verify += 1
+            return False
         journal.transition(item.asset_id, ItemState.DELETING, run_id=run_id)
         try:
             delete_asset(item, client)
@@ -217,7 +230,15 @@ def _archive_one(
     # Organize
     journal.transition(item.asset_id, ItemState.ORGANIZING, run_id=run_id)
     side = sidecar_dict(item, sha256=result.sha256, run_id=run_id)
-    organized = organize(item, files, archive_root, sidecar=side)
+    try:
+        organized = organize(item, files, archive_root, sidecar=side)
+    except OrganizeError as exc:
+        journal.transition(item.asset_id, ItemState.FAILED_VERIFY, run_id=run_id, error=str(exc))
+        outcome.failed_verify += 1
+        for p in (files.original, files.live_photo, files.edited):
+            if p is not None and p.exists():
+                p.unlink()
+        return False
 
     # Post-organize readback (spec §7.1): first-4KB hash must match.
     post_organize_4kb = _hash_first_4kb(organized.primary)
