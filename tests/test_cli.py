@@ -12,6 +12,18 @@ from icloud_archiver.types import CatalogItem
 from tests.fakes import FakeAsset, FakeICloudPhotos
 
 
+def _fake_internal_drive() -> Drive:
+    return Drive(
+        device_id="disk3s1",
+        volume_name="Macintosh HD",
+        mount_point=Path("/"),
+        fs="apfs",
+        free_bytes=400_000_000_000,
+        total_bytes=1_000_000_000_000,
+        is_external=False,
+    )
+
+
 def test_help_lists_subcommands() -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["--help"])
@@ -35,12 +47,14 @@ def test_login_saves_authenticated_email(tmp_path: Path, monkeypatch: pytest.Mon
     assert saved["email"] == "auth@example.com"
 
 
-def test_disks_subcommand_runs_without_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_disks_lists_internal_volume(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli_mod, "list_external_drives", lambda: [])
+    monkeypatch.setattr(cli_mod, "internal_drive", _fake_internal_drive)
     runner = CliRunner()
     result = runner.invoke(main, ["disks"])
     assert result.exit_code == 0
-    assert "No external drives mounted" in result.output
+    assert "Macintosh HD" in result.output
+    assert "internal" in result.output.lower()
 
 
 def test_plan_writes_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

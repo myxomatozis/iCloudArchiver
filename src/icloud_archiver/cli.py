@@ -17,6 +17,7 @@ from icloud_archiver.orchestrator import run_archival
 from icloud_archiver.preflight import (
     caffeinate_for_run,
     confirm_reformat,
+    internal_drive,
     list_external_drives,
     needs_reformat,
     pick_drive_interactive,
@@ -105,13 +106,15 @@ def login() -> None:
 
 @main.command()
 def disks() -> None:
-    """Print external drives that could be used as archive targets."""
-    drives = list_external_drives()
-    if not drives:
-        click.echo("No external drives mounted.")
-        return
+    """Print drives that could be used as archive targets."""
+    drives = [*list_external_drives(), internal_drive()]
     for i, d in enumerate(drives, start=1):
-        flag = "  ⚠ reformat needed" if needs_reformat(d.fs) else ""
+        if needs_reformat(d.fs):
+            flag = "  ⚠ reformat needed"
+        elif not d.is_external:
+            flag = "  (internal)"
+        else:
+            flag = ""
         click.echo(
             f"  [{i}] {d.volume_name:<18} {d.fs:<7} "
             f"{d.free_bytes / 1e12:.1f} TB free / {d.total_bytes / 1e12:.1f} TB   "
