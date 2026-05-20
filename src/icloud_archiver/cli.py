@@ -17,6 +17,8 @@ from icloud_archiver.orchestrator import run_archival
 from icloud_archiver.preflight import (
     caffeinate_for_run,
     confirm_reformat,
+    enough_free_space,
+    human_size,
     internal_drive,
     list_external_drives,
     needs_reformat,
@@ -105,6 +107,16 @@ def _interactive_picker() -> tuple[Path, Any]:
     return archive_root, drive
 
 
+def _abort_if_space_short(archive_root: Path, target_bytes: int) -> None:
+    """Abort before scanning if the destination cannot hold the download."""
+    ok, free, required = enough_free_space(archive_root, target_bytes)
+    if not ok:
+        raise click.ClickException(
+            f"not enough free space at {archive_root}: "
+            f"need ~{human_size(required)}, have {human_size(free)}"
+        )
+
+
 @click.group()
 def main() -> None:
     """Archive the oldest iCloud Photos to an external drive."""
@@ -142,6 +154,7 @@ def plan(target_freed: str) -> None:
     """Dry-run: produce a plan of what would be archived."""
     target_bytes = parse_size(target_freed)
     archive_root, _drive = _interactive_picker()
+    _abort_if_space_short(archive_root, target_bytes)
     client = _build_client()
     with Journal.open(_state_path()) as journal:
         outcome = run_archival(
@@ -214,6 +227,7 @@ def run(target_freed: str | None, plan_file: Path | None) -> None:
         target_bytes = parse_size(target_freed)
 
     archive_root, _drive = _interactive_picker()
+    _abort_if_space_short(archive_root, target_bytes)
     client = _build_client()
 
     with Journal.open(_state_path()) as journal:

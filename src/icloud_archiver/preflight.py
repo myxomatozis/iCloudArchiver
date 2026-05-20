@@ -120,7 +120,7 @@ def internal_drive() -> Drive:
     )
 
 
-def _human(n: int) -> str:
+def human_size(n: int) -> str:
     units = ["B", "KB", "MB", "GB", "TB"]
     f = float(n)
     for u in units:
@@ -142,7 +142,7 @@ def _render_table(drives: list[Drive]) -> str:
         name = d.volume_name[:18]
         rows.append(
             f"  [{i}]  {name:<18} {d.fs.upper():<7} "
-            f"{_human(d.free_bytes)} free / {_human(d.total_bytes)}   "
+            f"{human_size(d.free_bytes)} free / {human_size(d.total_bytes)}   "
             f"{d.mount_point}{flag}"
         )
     return "\n".join(rows)

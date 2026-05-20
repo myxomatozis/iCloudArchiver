@@ -362,3 +362,42 @@ def test_interactive_picker_internal_reprompts_on_relative_path(
     archive_root, _drive = cli_mod._interactive_picker()
 
     assert archive_root == tmp_path / "Good"
+
+
+def test_plan_aborts_when_space_short(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    drive = _make_drive(tmp_path)
+    monkeypatch.setattr(cli_mod, "list_external_drives", lambda: [drive])
+    monkeypatch.setattr(cli_mod, "internal_drive", _fake_internal_drive)
+    monkeypatch.setattr(cli_mod, "pick_drive_interactive", lambda _drives: drive)
+    monkeypatch.setattr("builtins.input", lambda _p="": "iCloud-Archive")
+    monkeypatch.setattr(cli_mod, "enough_free_space", lambda _root, _target: (False, 100, 999_999))
+    monkeypatch.setattr(cli_mod, "_state_path", lambda: tmp_path / "state.db")
+    monkeypatch.setattr(cli_mod, "_plans_dir", lambda: tmp_path / "plans")
+
+    built: list[int] = []
+    monkeypatch.setattr(cli_mod, "_build_client", lambda: built.append(1))
+
+    result = CliRunner().invoke(main, ["plan", "--target-freed", "1TB"])
+
+    assert result.exit_code != 0
+    assert built == []  # iCloud client never built — aborted before the scan
+    assert "space" in result.output.lower()
+
+
+def test_run_aborts_when_space_short(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    drive = _make_drive(tmp_path)
+    monkeypatch.setattr(cli_mod, "list_external_drives", lambda: [drive])
+    monkeypatch.setattr(cli_mod, "internal_drive", _fake_internal_drive)
+    monkeypatch.setattr(cli_mod, "pick_drive_interactive", lambda _drives: drive)
+    monkeypatch.setattr("builtins.input", lambda _p="": "iCloud-Archive")
+    monkeypatch.setattr(cli_mod, "enough_free_space", lambda _root, _target: (False, 100, 999_999))
+    monkeypatch.setattr(cli_mod, "_state_path", lambda: tmp_path / "state.db")
+
+    built: list[int] = []
+    monkeypatch.setattr(cli_mod, "_build_client", lambda: built.append(1))
+
+    result = CliRunner().invoke(main, ["run", "--target-freed", "1TB"])
+
+    assert result.exit_code != 0
+    assert built == []
+    assert "space" in result.output.lower()
