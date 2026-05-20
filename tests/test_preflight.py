@@ -6,6 +6,7 @@ import pytest
 from icloud_archiver.preflight import (
     Drive,
     enough_free_space,
+    internal_drive,
     list_external_drives,
     needs_reformat,
     pick_drive_interactive,
@@ -172,3 +173,63 @@ def test_enough_free_space_ok_at_exact_boundary(
     ok, _free, required = enough_free_space(tmp_path, target_bytes=1_000)
     assert ok is True
     assert required == 1_200
+
+
+def test_internal_drive_reports_non_external(monkeypatch: pytest.MonkeyPatch) -> None:
+    plist = b"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>DeviceIdentifier</key><string>disk3s1</string>
+  <key>VolumeName</key><string>Macintosh HD</string>
+  <key>FilesystemType</key><string>apfs</string>
+</dict>
+</plist>"""
+
+    def fake_run(*_args: object, **_kwargs: object) -> MagicMock:
+        m = MagicMock()
+        m.stdout = plist
+        m.returncode = 0
+        return m
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "icloud_archiver.preflight._volume_stats",
+        lambda _p: (400_000_000_000, 1_000_000_000_000),
+    )
+
+    drive = internal_drive()
+    assert drive.is_external is False
+    assert drive.volume_name == "Macintosh HD"
+    assert drive.fs == "apfs"
+    assert drive.free_bytes == 400_000_000_000
+    assert drive.total_bytes == 1_000_000_000_000
+    assert drive.mount_point == Path("/")
+
+
+def test_render_table_labels_internal_volume() -> None:
+    from icloud_archiver.preflight import _render_table
+
+    internal = Drive(
+        device_id="disk3s1",
+        volume_name="Macintosh HD",
+        mount_point=Path("/"),
+        fs="apfs",
+        free_bytes=400_000_000_000,
+        total_bytes=1_000_000_000_000,
+        is_external=False,
+    )
+    external = Drive(
+        device_id="disk4s2",
+        volume_name="Samsung T7",
+        mount_point=Path("/Volumes/T7"),
+        fs="apfs",
+        free_bytes=1_000_000_000_000,
+        total_bytes=2_000_000_000_000,
+        is_external=True,
+    )
+    table = _render_table([external, internal])
+    internal_line = next(line for line in table.splitlines() if "Macintosh HD" in line)
+    external_line = next(line for line in table.splitlines() if "Samsung T7" in line)
+    assert "(internal)" in internal_line
+    assert "(internal)" not in external_line

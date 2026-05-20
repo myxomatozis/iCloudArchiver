@@ -95,6 +95,31 @@ def list_external_drives() -> list[Drive]:
     return out
 
 
+def internal_drive() -> Drive:
+    """Build a Drive describing the Mac's internal storage.
+
+    Free/total are measured on the home volume — where a local archive under
+    `~` actually lives. The archive path for the internal volume is prompted
+    separately, so `mount_point` (`/`) is not used as the archive base.
+    """
+    res = subprocess.run(
+        ["diskutil", "info", "-plist", "/"],
+        capture_output=True,
+        check=True,
+    )
+    info = plistlib.loads(res.stdout)
+    free, total = _volume_stats(Path.home())
+    return Drive(
+        device_id=str(info.get("DeviceIdentifier", "")),
+        volume_name=str(info.get("VolumeName", "Internal")),
+        mount_point=Path("/"),
+        fs=str(info.get("FilesystemType", "apfs")).lower(),
+        free_bytes=free,
+        total_bytes=total,
+        is_external=False,
+    )
+
+
 def _human(n: int) -> str:
     units = ["B", "KB", "MB", "GB", "TB"]
     f = float(n)
@@ -106,9 +131,14 @@ def _human(n: int) -> str:
 
 
 def _render_table(drives: list[Drive]) -> str:
-    rows = ["External drives available:\n"]
+    rows = ["Drives available:\n"]
     for i, d in enumerate(drives, start=1):
-        flag = "  ⚠ will need reformat" if needs_reformat(d.fs) else ""
+        if needs_reformat(d.fs):
+            flag = "  ⚠ will need reformat"
+        elif not d.is_external:
+            flag = "  (internal)"
+        else:
+            flag = ""
         name = d.volume_name[:18]
         rows.append(
             f"  [{i}]  {name:<18} {d.fs.upper():<7} "
