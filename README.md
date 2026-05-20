@@ -71,6 +71,20 @@ The JSON file is written next to the markdown report that `plan` already
 produces. Any items already completed by the time `run` starts are silently
 skipped (the journal filters them out).
 
+## Choosing a destination
+
+`plan` and `run` open an interactive picker listing every external drive plus
+your Mac's internal volume:
+
+- **External drive** — you give a subdirectory name; the archive lives at
+  `<mount>/<name>`.
+- **Internal volume** — you type a full archive path (absolute; a leading `~`
+  is expanded), e.g. `~/Photos/iCloud-Archive`.
+
+Before scanning iCloud, the tool checks the chosen destination has room for the
+download (`--target-freed` plus 20% headroom) and aborts immediately if it does
+not — so a too-small disk fails fast instead of after a long scan.
+
 ## Status & resume
 
 ```bash
