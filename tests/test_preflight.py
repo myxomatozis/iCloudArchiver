@@ -5,6 +5,7 @@ import pytest
 
 from icloud_archiver.preflight import (
     Drive,
+    enough_free_space,
     list_external_drives,
     needs_reformat,
     pick_drive_interactive,
@@ -145,3 +146,29 @@ def test_pick_drive_interactive_quit(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(SystemExit) as exc_info:
         pick_drive_interactive(drives)
     assert exc_info.value.code == 0
+
+
+def test_enough_free_space_true_when_room(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("icloud_archiver.preflight._volume_stats", lambda _p: (2_000, 9_999))
+    ok, free, required = enough_free_space(tmp_path, target_bytes=1_000)
+    assert ok is True
+    assert free == 2_000
+    assert required == 1_200  # 1000 * 1.2
+
+
+def test_enough_free_space_false_when_short(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("icloud_archiver.preflight._volume_stats", lambda _p: (1_000, 9_999))
+    ok, _free, required = enough_free_space(tmp_path, target_bytes=1_000)
+    assert ok is False
+    assert required == 1_200
+
+
+def test_enough_free_space_ok_at_exact_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("icloud_archiver.preflight._volume_stats", lambda _p: (1_200, 9_999))
+    ok, _free, required = enough_free_space(tmp_path, target_bytes=1_000)
+    assert ok is True
+    assert required == 1_200

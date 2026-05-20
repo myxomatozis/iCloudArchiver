@@ -42,6 +42,17 @@ def _volume_stats(mount_point: Path) -> tuple[int, int]:
     return s.f_bavail * s.f_frsize, s.f_blocks * s.f_frsize
 
 
+def enough_free_space(archive_root: Path, target_bytes: int) -> tuple[bool, int, int]:
+    """Check the destination volume can hold the projected download.
+
+    Returns (ok, free_bytes, required_bytes). `required` is `target_bytes`
+    scaled by the same 1.2x headroom factor `orchestrator.run_archival` uses.
+    """
+    free, _total = _volume_stats(archive_root)
+    required = int(target_bytes * 1.2)
+    return free >= required, free, required
+
+
 def list_external_drives() -> list[Drive]:
     """Probe `diskutil list -plist` and return mounted, non-system volumes.
 
