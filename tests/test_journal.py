@@ -256,3 +256,26 @@ def test_items_for_run(tmp_path: Path) -> None:
     assert result.mime_type == "image/heic"
     assert result.size_bytes == 2_000
     assert result.created_at == datetime(2019, 3, 10, tzinfo=UTC)
+
+
+def test_items_for_run_finds_items_re_planned_by_a_later_run(tmp_path: Path) -> None:
+    """Regression: when an item was first seen by an earlier plan and a later
+    plan re-upserts it as PLANNED, items_for_run(later_run) must still find
+    it. `first_seen_run` is set on INSERT and never updated, so a filter on
+    that column would miss the re-planned item — the correct match is via
+    the item_events row written by the later plan."""
+    journal = Journal.open(tmp_path / "state.db")
+
+    first_plan = journal.start_run(target_bytes=1, dry_run=True, archive_root="/x")
+    second_plan = journal.start_run(target_bytes=1, dry_run=True, archive_root="/x")
+    item = _make_item("a")
+    journal.upsert_item(item, first_plan, ItemState.PLANNED)
+    journal.end_run(first_plan, RunStatus.COMPLETED)
+    # Second plan re-yields the same item and re-upserts it as PLANNED.
+    journal.upsert_item(item, second_plan, ItemState.PLANNED)
+    journal.end_run(second_plan, RunStatus.COMPLETED)
+
+    results = journal.items_for_run(second_plan)
+    journal.close()
+
+    assert [r.asset_id for r in results] == ["a"]

@@ -277,18 +277,25 @@ class Journal:
         return out
 
     def items_for_run(self, run_id: str) -> list[CatalogItem]:
-        """Return fully populated CatalogItems first-seen in *run_id* that are still PLANNED.
+        """Return CatalogItems planned in *run_id* that are still PLANNED.
 
-        Used by ``run --from-plan`` to load the item list a preceding ``plan`` run produced
-        without deserialising a large JSON array.
+        Used by ``run --from-plan`` to load the item list a preceding ``plan``
+        run produced. We match via ``item_events`` (rows where this run wrote
+        a PLANNED transition) rather than via ``items.first_seen_run``: that
+        column is only set on INSERT and never updated, so an item re-planned
+        by a later run still carries its original ``first_seen_run``, and a
+        first_seen_run-based filter would miss it on the second plan.
         """
         rows = self._conn.execute(
-            "SELECT asset_id, created_at, size_bytes, original_filename, albums, "
-            "has_live_photo, has_edits, mime_type, icloud_checksum "
-            "FROM items "
-            "WHERE first_seen_run = ? AND state = ? "
-            "ORDER BY created_at ASC",
-            (run_id, ItemState.PLANNED.value),
+            "SELECT i.asset_id, i.created_at, i.size_bytes, i.original_filename, i.albums, "
+            "i.has_live_photo, i.has_edits, i.mime_type, i.icloud_checksum "
+            "FROM items i "
+            "WHERE i.state = ? AND EXISTS ("
+            "  SELECT 1 FROM item_events e "
+            "  WHERE e.asset_id = i.asset_id AND e.run_id = ? AND e.to_state = ?"
+            ") "
+            "ORDER BY i.created_at ASC",
+            (ItemState.PLANNED.value, run_id, ItemState.PLANNED.value),
         ).fetchall()
         out: list[CatalogItem] = []
         for r in rows:
