@@ -186,11 +186,12 @@ class RealICloudPhotos:
 
     def _download(self, asset_id: str, variant: str, dest: Path) -> None:
         photo = self._find(asset_id)
-        # pyicloud 2.x: download() returns Optional[bytes] directly (no streaming context manager).
-        data = photo.download(variant)
-        if data is None:
+        url = photo.download_url(variant)
+        if url is None:
             raise ValueError(f"variant '{variant}' not available for asset {asset_id}")
-        dest.write_bytes(data)
+        # Stream straight to disk; pyicloud's photo.download() would read the
+        # whole file into memory (response.raw.read()).
+        _stream_to_file(self._svc.session, url, dest)
 
     def delete(self, asset_id: str) -> None:
         self._find(asset_id).delete()

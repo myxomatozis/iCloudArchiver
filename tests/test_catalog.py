@@ -178,3 +178,49 @@ def test_stream_to_file_raises_on_http_error(tmp_path: Path) -> None:
 
     assert response.raise_for_status_called is True
     assert not dest.exists(), "failed download must not leave a partial file"
+
+
+class _FakeDownloadPhoto:
+    def __init__(self, pid: str, url: str | None) -> None:
+        self.id = pid
+        self._url = url
+
+    def download_url(self, variant: str) -> str | None:
+        return self._url
+
+
+class _FakeServiceWithSession:
+    """Exposes .photos.all (by-id lookup) and .session (streaming)."""
+
+    def __init__(self, photo: _FakeDownloadPhoto, session: _FakeSession) -> None:
+        self.photos = _FakePhotosService(_CountingAll([photo]))  # type: ignore[arg-type]
+        self.session = session
+
+
+def test_download_streams_to_dest(tmp_path: Path) -> None:
+    photo = _FakeDownloadPhoto("id1", "https://example/asset")
+    session = _FakeSession(_FakeResponse([b"chunk-A", b"chunk-B"]))
+    client = RealICloudPhotos(_FakeServiceWithSession(photo, session))
+    dest = tmp_path / "id1_orig.jpg"
+
+    client._download("id1", "original", dest)
+
+    assert dest.read_bytes() == b"chunk-Achunk-B"
+    assert session.stream_arg is True
+    assert session.url == "https://example/asset"
+
+
+def test_download_raises_when_variant_unavailable(tmp_path: Path) -> None:
+    photo = _FakeDownloadPhoto("id1", None)  # download_url -> None
+    session = _FakeSession(_FakeResponse([b"unused"]))
+    client = RealICloudPhotos(_FakeServiceWithSession(photo, session))
+    dest = tmp_path / "id1_orig.jpg"
+
+    try:
+        client._download("id1", "edited", dest)
+    except ValueError as exc:
+        assert "edited" in str(exc)
+    else:  # pragma: no cover - explicit failure path
+        raise AssertionError("expected ValueError for unavailable variant")
+
+    assert not dest.exists()
