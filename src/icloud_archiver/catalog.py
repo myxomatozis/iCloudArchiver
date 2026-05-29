@@ -5,13 +5,16 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
+from pyicloud.const import CONTENT_TYPE, CONTENT_TYPE_TEXT  # type: ignore[import-untyped]
+from pyicloud.services.photos import PhotoAsset  # type: ignore[import-untyped]
 from tqdm import tqdm
 
 from icloud_archiver.types import CatalogItem
 
 try:
-    from pyicloud.services.photos import (  # type: ignore[import-untyped]
+    from pyicloud.services.photos import (
         SmartPhotoAlbum as _SmartPhotoAlbum,
     )
 except ImportError:  # pragma: no cover — only missing in unit-test environments
@@ -94,6 +97,7 @@ class RealICloudPhotos:
         self._svc = pyicloud_service
         self._album_index: dict[str, list[str]] | None = None
         self._photo_cache: dict[str, Any] = {}  # asset_id → live PhotoAsset
+        self._zone_cache: dict[str, str] | None = None  # primary-library CloudKit zone (lazy)
 
     # ------------------------------------------------------------------
     # Album index
@@ -205,19 +209,70 @@ class RealICloudPhotos:
             if str(photo.id) in target:
                 photo.delete()  # permanent in Recently Deleted
 
+    @property
+    def _zone_id(self) -> dict[str, str]:
+        """Primary-library CloudKit zone (incl. ownerRecordName), fetched once.
+
+        Used both as the ``zoneID`` on records/lookup requests and injected into
+        looked-up asset records so ``PhotoAsset.delete()`` (records/modify) works.
+        """
+        zone = self._zone_cache
+        if zone is None:
+            zone = self._svc.photos.libraries["PrimarySync"].zone_id
+            self._zone_cache = zone
+        return zone
+
+    def _lookup_records(self, record_names: list[str]) -> dict[str, Any]:
+        """POST records/lookup for *record_names*.
+
+        Returns ``{recordName: record}`` for records that resolved; records that
+        came back with a ``serverErrorCode`` (e.g. NOT_FOUND) are omitted.
+        """
+        url = (
+            f"{self._svc.photos.service_endpoint}/records/lookup"
+            f"?{urlencode(self._svc.photos.params)}"
+        )
+        body = {
+            "records": [{"recordName": rn} for rn in record_names],
+            "zoneID": self._zone_id,
+        }
+        resp = self._svc.photos.session.post(
+            url, json=body, headers={CONTENT_TYPE: CONTENT_TYPE_TEXT}
+        )
+        return {
+            rec["recordName"]: rec
+            for rec in resp.json().get("records", [])
+            if "serverErrorCode" not in rec
+        }
+
+    def _lookup_photo(self, asset_id: str) -> Any:
+        """Resolve a live PhotoAsset by its CPLAsset recordName via two lookups.
+
+        pyicloud's ``photos.all.get(id)`` cannot do this against the live API (the
+        all-photos query rejects ``resultsLimit=1`` and ignores the recordName
+        filter), so we hit the records/lookup endpoint directly: fetch the asset
+        record, follow its ``masterRef`` to the master record (which holds the
+        download URLs), and rebuild the ``PhotoAsset``.
+        """
+        asset_rec = self._lookup_records([asset_id]).get(asset_id)
+        if asset_rec is None:
+            raise KeyError(f"photo not found in library: {asset_id}")
+        # The looked-up asset record omits zoneID; delete() reads it off the record.
+        asset_rec.setdefault("zoneID", self._zone_id)
+        master_id = asset_rec["fields"]["masterRef"]["value"]["recordName"]
+        master_rec = self._lookup_records([master_id]).get(master_id)
+        if master_rec is None:
+            raise KeyError(f"master record missing for {asset_id}")
+        return PhotoAsset(self._svc.photos, master_rec, asset_rec)
+
     def _find(self, asset_id: str) -> Any:
-        # Fast path: photo was seen during the catalog scan.
+        # Fast path: photo already cached (the --target-freed scan populates the
+        # cache as it iterates; see iter_oldest_first).
         cached = self._photo_cache.get(asset_id)
         if cached is not None:
             return cached
-        # No scan happened (e.g. --from-plan), so the cache is cold. Fetch this
-        # one photo by id with a single targeted CloudKit query instead of
-        # paging the whole library: pyicloud filters on recordName == asset_id,
-        # and our asset_id IS that recordName (PhotoAsset.id). This keeps lookups
-        # O(1) per item — the old full-library walk was O(N) per item / O(N^2)
-        # per run, which made --from-plan downloads climb to ~60s/item.
-        photo = self._svc.photos.all.get(asset_id)
-        if photo is None:
-            raise KeyError(f"photo not found in library: {asset_id}")
+        # Cold cache (run --from-plan): resolve this id directly via
+        # records/lookup. No library walk — missing items raise immediately.
+        photo = self._lookup_photo(asset_id)
         self._photo_cache[asset_id] = photo
         return photo

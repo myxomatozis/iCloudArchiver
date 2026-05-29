@@ -38,70 +38,6 @@ def test_photo_to_catalog_item_maps_required_fields() -> None:
     assert item.mime_type == "image/heic"
 
 
-class _FakePhotoAsset:
-    def __init__(self, pid: str) -> None:
-        self.id = pid
-
-
-class _CountingAll:
-    """Stands in for svc.photos.all; tracks by-id gets and full iterations."""
-
-    def __init__(self, photos: list[_FakePhotoAsset]) -> None:
-        self._by_id = {p.id: p for p in photos}
-        self.iter_count = 0
-        self.get_count = 0
-
-    def __iter__(self) -> Iterator[_FakePhotoAsset]:
-        self.iter_count += 1
-        return iter(self._by_id.values())
-
-    def get(self, key: str) -> _FakePhotoAsset | None:
-        self.get_count += 1
-        return self._by_id.get(key)
-
-
-class _FakePhotosService:
-    def __init__(self, all_: _CountingAll) -> None:
-        self.all = all_
-
-
-class _FakeSvc:
-    def __init__(self, photos: _FakePhotosService) -> None:
-        self.photos = photos
-
-
-def test_find_fetches_by_id_without_paging_library() -> None:
-    """Regression: --from-plan starts with a cold cache, so every item triggers
-    _find. _find must resolve each asset with a targeted by-id fetch and never
-    page the whole library (the O(N^2) walk that made downloads ~60s/item and
-    forced a multi-minute upfront indexing pass).
-    """
-    photos = [_FakePhotoAsset(f"id{i}") for i in range(50)]
-    counting = _CountingAll(photos)
-    client = RealICloudPhotos(_FakeSvc(_FakePhotosService(counting)))
-
-    # Look up every asset with a cold cache, mimicking the --from-plan run loop.
-    for i in range(50):
-        assert client._find(f"id{i}").id == f"id{i}"
-
-    assert counting.iter_count == 0, "must not page the library; fetch by id instead"
-    assert counting.get_count == 50, "each cold-cache lookup should be one by-id fetch"
-
-    # A repeat lookup is served from cache — no extra network fetch.
-    assert client._find("id0").id == "id0"
-    assert counting.get_count == 50
-
-
-def test_find_raises_keyerror_for_unknown_asset() -> None:
-    counting = _CountingAll([_FakePhotoAsset("id0")])
-    client = RealICloudPhotos(_FakeSvc(_FakePhotosService(counting)))
-    try:
-        client._find("missing")
-    except KeyError:
-        pass
-    else:  # pragma: no cover - explicit failure path
-        raise AssertionError("expected KeyError for unknown asset id")
-
 
 class _FakeResponse:
     def __init__(self, chunks: list[bytes], status_ok: bool = True) -> None:
@@ -189,20 +125,158 @@ class _FakeDownloadPhoto:
         return self._url
 
 
-class _FakeServiceWithSession:
-    """Exposes .photos.all (by-id lookup) and .session (streaming)."""
 
-    def __init__(self, photo: _FakeDownloadPhoto, session: _FakeSession) -> None:
-        self.photos = _FakePhotosService(_CountingAll([photo]))  # type: ignore[arg-type]
+# --- records/lookup-by-id fakes ---
+
+_ZONE = {
+    "zoneName": "PrimarySync",
+    "ownerRecordName": "_owner",
+    "zoneType": "REGULAR_CUSTOM_ZONE",
+}
+
+
+class _LookupResponse:
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _LookupSession:
+    """Serves records/lookup POSTs from a {recordName: record} table."""
+
+    def __init__(self, records: dict[str, dict]) -> None:
+        self._records = records
+        self.posts: list[tuple[str, dict]] = []
+
+    def post(self, url: str, json: dict, headers: dict) -> _LookupResponse:
+        self.posts.append((url, json))
+        recs = [
+            self._records.get(
+                r["recordName"],
+                {"recordName": r["recordName"], "serverErrorCode": "NOT_FOUND"},
+            )
+            for r in json["records"]
+        ]
+        return _LookupResponse({"records": recs})
+
+
+class _LookupLibrary:
+    def __init__(self, zone: dict) -> None:
+        self.zone_id = zone
+
+
+class _LookupPhotosSvc:
+    def __init__(self, session: _LookupSession) -> None:
+        self.session = session
+        self.service_endpoint = "https://ck.example/db"
+        self.params = {"dsid": "X"}
+        self.libraries = {"PrimarySync": _LookupLibrary(_ZONE)}
+
+
+class _LookupSvc:
+    def __init__(self, records: dict[str, dict]) -> None:
+        self.session = _LookupSession(records)
+        self.photos = _LookupPhotosSvc(self.session)
+
+
+def _asset_record(asset_id: str = "ASSET1", master_id: str = "MASTER1") -> dict:
+    return {
+        "recordName": asset_id,
+        "recordType": "CPLAsset",
+        "recordChangeTag": "tag1",
+        "fields": {"masterRef": {"value": {"recordName": master_id}}},
+    }
+
+
+def _master_record(master_id: str = "MASTER1") -> dict:
+    return {"recordName": master_id, "recordType": "CPLMaster", "fields": {}}
+
+
+def test_zone_id_fetched_once() -> None:
+    svc = _LookupSvc({})
+    client = RealICloudPhotos(svc)
+    assert client._zone_id == _ZONE
+    assert client._zone_id is client._zone_cache  # cached after first access
+
+
+def test_lookup_photo_resolves_by_id_with_two_lookups() -> None:
+    svc = _LookupSvc({"ASSET1": _asset_record(), "MASTER1": _master_record()})
+    client = RealICloudPhotos(svc)
+
+    photo = client._lookup_photo("ASSET1")
+
+    assert photo.id == "ASSET1"
+    # Two lookups, in order: the asset, then its master.
+    assert [b["records"][0]["recordName"] for (_u, b) in svc.session.posts] == [
+        "ASSET1",
+        "MASTER1",
+    ]
+    # Every lookup carried the zone; zoneID injected into the asset record for delete().
+    assert all(b["zoneID"] == _ZONE for (_u, b) in svc.session.posts)
+    assert photo._asset_record["zoneID"] == _ZONE
+
+
+def test_lookup_photo_raises_keyerror_when_asset_not_found() -> None:
+    client = RealICloudPhotos(_LookupSvc({}))  # nothing resolves → NOT_FOUND
+    try:
+        client._lookup_photo("MISSING")
+    except KeyError as exc:
+        assert "MISSING" in str(exc)
+    else:  # pragma: no cover - explicit failure path
+        raise AssertionError("expected KeyError for missing asset")
+
+
+def test_lookup_photo_raises_keyerror_when_master_missing() -> None:
+    # Asset resolves but its master record does not.
+    client = RealICloudPhotos(_LookupSvc({"ASSET1": _asset_record()}))
+    try:
+        client._lookup_photo("ASSET1")
+    except KeyError as exc:
+        assert "ASSET1" in str(exc)
+    else:  # pragma: no cover - explicit failure path
+        raise AssertionError("expected KeyError for missing master")
+
+
+def test_find_looks_up_on_miss_then_caches() -> None:
+    svc = _LookupSvc({"ASSET1": _asset_record(), "MASTER1": _master_record()})
+    client = RealICloudPhotos(svc)
+
+    first = client._find("ASSET1")
+    assert first.id == "ASSET1"
+    posts_after_first = len(svc.session.posts)
+
+    # Second lookup of the same id is served from cache — no further POSTs.
+    second = client._find("ASSET1")
+    assert second is first
+    assert len(svc.session.posts) == posts_after_first
+
+
+def test_find_raises_keyerror_for_unknown_asset() -> None:
+    client = RealICloudPhotos(_LookupSvc({}))
+    try:
+        client._find("missing")
+    except KeyError as exc:
+        assert "missing" in str(exc)
+    else:  # pragma: no cover - explicit failure path
+        raise AssertionError("expected KeyError for unknown asset id")
+
+
+class _StreamSvc:
+    """Minimal service exposing only .session, for _download's _stream_to_file."""
+
+    def __init__(self, session: _FakeSession) -> None:
         self.session = session
 
 
 def test_download_streams_to_dest(tmp_path: Path) -> None:
     photo = _FakeDownloadPhoto("id1", "https://example/asset")
     session = _FakeSession(_FakeResponse([b"chunk-A", b"chunk-B"]))
-    client = RealICloudPhotos(_FakeServiceWithSession(photo, session))
-    dest = tmp_path / "id1_orig.jpg"
+    client = RealICloudPhotos(_StreamSvc(session))
+    client._photo_cache["id1"] = photo  # pre-seed: _find hits cache, no lookup
 
+    dest = tmp_path / "id1_orig.jpg"
     client._download("id1", "original", dest)
 
     assert dest.read_bytes() == b"chunk-Achunk-B"
@@ -213,9 +287,10 @@ def test_download_streams_to_dest(tmp_path: Path) -> None:
 def test_download_raises_when_variant_unavailable(tmp_path: Path) -> None:
     photo = _FakeDownloadPhoto("id1", None)  # download_url -> None
     session = _FakeSession(_FakeResponse([b"unused"]))
-    client = RealICloudPhotos(_FakeServiceWithSession(photo, session))
-    dest = tmp_path / "id1_orig.jpg"
+    client = RealICloudPhotos(_StreamSvc(session))
+    client._photo_cache["id1"] = photo
 
+    dest = tmp_path / "id1_orig.jpg"
     try:
         client._download("id1", "edited", dest)
     except ValueError as exc:
