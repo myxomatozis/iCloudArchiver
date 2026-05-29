@@ -17,6 +17,22 @@ try:
 except ImportError:  # pragma: no cover — only missing in unit-test environments
     _SmartPhotoAlbum = None
 
+_DOWNLOAD_CHUNK_BYTES = 1024 * 1024  # 1 MiB; matches verifier's hash read size
+
+
+def _stream_to_file(session: Any, url: str, dest: Path) -> None:
+    """Stream an HTTP GET response body to *dest* in fixed-size chunks.
+
+    Avoids holding the whole file in memory (pyicloud's PhotoAsset.download()
+    does response.raw.read()). *session* is any requests.Session-like object.
+    """
+    with session.get(url, stream=True) as resp:
+        resp.raise_for_status()
+        with dest.open("wb") as f:
+            for chunk in resp.iter_content(_DOWNLOAD_CHUNK_BYTES):
+                if chunk:  # skip keep-alive empty chunks
+                    f.write(chunk)
+
 
 def _normalize_albums(raw: list[Any]) -> list[str]:
     flat: list[str] = []
