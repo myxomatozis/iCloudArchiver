@@ -204,6 +204,63 @@ def test_run_from_plan_skips_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert "skipping icloud scan" in result.output.lower()
 
 
+def test_run_from_plan_reuses_saved_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run --from-plan reuses the plan's archive_root instead of re-prompting."""
+    from icloud_archiver.journal import Journal as _Journal
+    from icloud_archiver.types import ItemState, RunStatus
+
+    drive = _make_drive(tmp_path)
+    archive_root = drive.mount_point / "iCloud-Archive"
+
+    # Any attempt to re-pick a drive or read stdin is a failure for this test.
+    def _no_pick(_drives: object) -> object:
+        raise AssertionError("interactive picker must not run when plan has a destination")
+
+    monkeypatch.setattr(cli_mod, "list_external_drives", lambda: [drive])
+    monkeypatch.setattr(cli_mod, "pick_drive_interactive", _no_pick)
+    monkeypatch.setattr(cli_mod, "internal_drive", _fake_internal_drive)
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda _p="": (_ for _ in ()).throw(AssertionError("must not prompt for input")),
+    )
+    monkeypatch.setattr(cli_mod, "_state_path", lambda: tmp_path / "state.db")
+
+    item = _make_fake_asset("c").item
+    db_journal = _Journal.open(tmp_path / "state.db")
+    plan_run_id = db_journal.start_run(
+        target_bytes=5000, dry_run=True, archive_root=str(archive_root)
+    )
+    db_journal.upsert_item(item, plan_run_id, ItemState.PLANNED)
+    db_journal.end_run(plan_run_id, RunStatus.COMPLETED)
+    db_journal.close()
+
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "target_bytes": 5000,
+                "archive_root": str(archive_root),
+                "created_at": "20250101T000000Z",
+                "plan_run_id": plan_run_id,
+                "item_count": 1,
+            }
+        )
+    )
+
+    fake_client = FakeICloudPhotos(assets=[_make_fake_asset("c")])
+    monkeypatch.setattr(cli_mod, "_build_client", lambda: fake_client)
+    monkeypatch.setattr(cli_mod, "caffeinate_for_run", lambda: _NullSleepBlock())
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["run", "--from-plan", str(plan_path)])
+    assert result.exit_code == 0, result.output
+    assert "using archive destination from plan" in result.output.lower()
+    assert str(archive_root) in result.output
+
+
 def _seed_journal(db_path: Path) -> None:
     """Journal with one PLANNED item ('keep') and two DELETED items ('d1','d2')."""
     from icloud_archiver.journal import Journal as _Journal

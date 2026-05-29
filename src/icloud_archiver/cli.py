@@ -107,6 +107,22 @@ def _interactive_picker() -> tuple[Path, Any]:
     return archive_root, drive
 
 
+def _reuse_plan_destination(saved_root: str | None) -> Path | None:
+    """Return the plan's saved archive destination if it is usable right now.
+
+    Reusable when the directory exists, or its parent (the volume mount point)
+    exists so we can create the subdirectory. Returns None when nothing was
+    saved (older plans) or the volume is not mounted — the caller then falls
+    back to the interactive picker rather than writing to the wrong place.
+    """
+    if not saved_root:
+        return None
+    root = Path(saved_root)
+    if root.exists() or root.parent.exists():
+        return root
+    return None
+
+
 def _abort_if_space_short(archive_root: Path, target_bytes: int) -> None:
     """Abort before scanning if the destination cannot hold the download."""
     ok, free, required = enough_free_space(archive_root, target_bytes)
@@ -217,16 +233,32 @@ def run(target_freed: str | None, plan_file: Path | None) -> None:
 
     plan_run_id: str | None = None
     plan_file_name: str | None = None
+    saved_root: str | None = None
     if plan_file is not None:
         plan_data = json.loads(plan_file.read_text())
         target_bytes = plan_data["target_bytes"]
         plan_run_id = plan_data["plan_run_id"]
         plan_file_name = plan_file.name
+        saved_root = plan_data.get("archive_root")
     else:
         assert target_freed is not None  # checked above
         target_bytes = parse_size(target_freed)
 
-    archive_root, _drive = _interactive_picker()
+    # Reuse the destination recorded in the plan so a --from-plan run doesn't
+    # re-prompt for drive + folder. Fall back to the picker if it's unavailable
+    # (older plan, or the drive isn't mounted).
+    archive_root = _reuse_plan_destination(saved_root)
+    if archive_root is not None:
+        archive_root.mkdir(parents=True, exist_ok=True)
+        click.echo(f"Using archive destination from plan: {archive_root}")
+    else:
+        if saved_root:
+            click.echo(
+                f"Plan destination '{saved_root}' is not available (drive not mounted?) — "
+                "choose a destination.",
+                err=True,
+            )
+        archive_root, _drive = _interactive_picker()
     _abort_if_space_short(archive_root, target_bytes)
     client = _build_client()
 
