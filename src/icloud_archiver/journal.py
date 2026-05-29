@@ -57,6 +57,11 @@ CREATE TABLE IF NOT EXISTS item_events (
 );
 CREATE INDEX IF NOT EXISTS items_state_idx ON items(state);
 CREATE INDEX IF NOT EXISTS items_created_idx ON items(created_at);
+-- Covers the per-asset EXISTS lookups in items_for_run / bytes_freed_total.
+-- Without it those run as a full item_events SCAN per PLANNED item, which made
+-- `run --from-plan` sit silent for minutes before "Loaded N items".
+CREATE INDEX IF NOT EXISTS item_events_asset_run_state_idx
+  ON item_events(asset_id, run_id, to_state);
 """
 
 

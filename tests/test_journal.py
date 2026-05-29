@@ -279,3 +279,25 @@ def test_items_for_run_finds_items_re_planned_by_a_later_run(tmp_path: Path) -> 
     journal.close()
 
     assert [r.asset_id for r in results] == ["a"]
+
+
+def test_items_for_run_uses_index_not_full_scan(tmp_path: Path) -> None:
+    """Regression: the per-asset EXISTS in items_for_run must resolve via an
+    index on item_events, not a full table SCAN per PLANNED item. The full scan
+    made `run --from-plan` sit silent for minutes before "Loaded N items".
+    """
+    journal = Journal.open(tmp_path / "state.db")
+    plan = journal._conn.execute(
+        "EXPLAIN QUERY PLAN "
+        "SELECT i.asset_id FROM items i "
+        "WHERE i.state=? AND EXISTS ("
+        "  SELECT 1 FROM item_events e "
+        "  WHERE e.asset_id=i.asset_id AND e.run_id=? AND e.to_state=?"
+        ") ORDER BY i.created_at ASC",
+        (ItemState.PLANNED.value, "X", ItemState.PLANNED.value),
+    ).fetchall()
+    journal.close()
+
+    details = " | ".join(str(row[-1]) for row in plan)
+    assert "item_events_asset_run_state_idx" in details, details
+    assert "SCAN e" not in details, details
