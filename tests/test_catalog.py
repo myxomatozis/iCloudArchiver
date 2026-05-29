@@ -1,6 +1,7 @@
+from collections.abc import Iterator
 from datetime import UTC, datetime
 
-from icloud_archiver.catalog import _normalize_albums, _photo_to_catalog_item
+from icloud_archiver.catalog import RealICloudPhotos, _normalize_albums, _photo_to_catalog_item
 
 
 def test_normalize_albums_sorts_case_insensitive() -> None:
@@ -34,3 +35,68 @@ def test_photo_to_catalog_item_maps_required_fields() -> None:
     assert item.has_live_photo is True
     assert item.has_edits is False
     assert item.mime_type == "image/heic"
+
+
+class _FakePhotoAsset:
+    def __init__(self, pid: str) -> None:
+        self.id = pid
+
+
+class _CountingAll:
+    """Stands in for svc.photos.all; tracks by-id gets and full iterations."""
+
+    def __init__(self, photos: list[_FakePhotoAsset]) -> None:
+        self._by_id = {p.id: p for p in photos}
+        self.iter_count = 0
+        self.get_count = 0
+
+    def __iter__(self) -> Iterator[_FakePhotoAsset]:
+        self.iter_count += 1
+        return iter(self._by_id.values())
+
+    def get(self, key: str) -> _FakePhotoAsset | None:
+        self.get_count += 1
+        return self._by_id.get(key)
+
+
+class _FakePhotosService:
+    def __init__(self, all_: _CountingAll) -> None:
+        self.all = all_
+
+
+class _FakeSvc:
+    def __init__(self, photos: _FakePhotosService) -> None:
+        self.photos = photos
+
+
+def test_find_fetches_by_id_without_paging_library() -> None:
+    """Regression: --from-plan starts with a cold cache, so every item triggers
+    _find. _find must resolve each asset with a targeted by-id fetch and never
+    page the whole library (the O(N^2) walk that made downloads ~60s/item and
+    forced a multi-minute upfront indexing pass).
+    """
+    photos = [_FakePhotoAsset(f"id{i}") for i in range(50)]
+    counting = _CountingAll(photos)
+    client = RealICloudPhotos(_FakeSvc(_FakePhotosService(counting)))
+
+    # Look up every asset with a cold cache, mimicking the --from-plan run loop.
+    for i in range(50):
+        assert client._find(f"id{i}").id == f"id{i}"
+
+    assert counting.iter_count == 0, "must not page the library; fetch by id instead"
+    assert counting.get_count == 50, "each cold-cache lookup should be one by-id fetch"
+
+    # A repeat lookup is served from cache — no extra network fetch.
+    assert client._find("id0").id == "id0"
+    assert counting.get_count == 50
+
+
+def test_find_raises_keyerror_for_unknown_asset() -> None:
+    counting = _CountingAll([_FakePhotoAsset("id0")])
+    client = RealICloudPhotos(_FakeSvc(_FakePhotosService(counting)))
+    try:
+        client._find("missing")
+    except KeyError:
+        pass
+    else:  # pragma: no cover - explicit failure path
+        raise AssertionError("expected KeyError for unknown asset id")

@@ -190,15 +190,17 @@ class RealICloudPhotos:
 
     def _find(self, asset_id: str) -> Any:
         # Fast path: photo was seen during the catalog scan.
-        if asset_id in self._photo_cache:
-            return self._photo_cache[asset_id]
-        # Slow path (e.g. --from-plan skipped the scan): walk the library once
-        # and cache everything so subsequent calls are O(1).
-        # Default DESCENDING direction starts at the oldest photo (offset=len-1)
-        # so items we typically want are encountered early.
-        for photo in self._svc.photos.all:
-            pid = str(photo.id)
-            self._photo_cache[pid] = photo
-            if pid == asset_id:
-                return photo
-        raise KeyError(f"photo not found in library: {asset_id}")
+        cached = self._photo_cache.get(asset_id)
+        if cached is not None:
+            return cached
+        # No scan happened (e.g. --from-plan), so the cache is cold. Fetch this
+        # one photo by id with a single targeted CloudKit query instead of
+        # paging the whole library: pyicloud filters on recordName == asset_id,
+        # and our asset_id IS that recordName (PhotoAsset.id). This keeps lookups
+        # O(1) per item — the old full-library walk was O(N) per item / O(N^2)
+        # per run, which made --from-plan downloads climb to ~60s/item.
+        photo = self._svc.photos.all.get(asset_id)
+        if photo is None:
+            raise KeyError(f"photo not found in library: {asset_id}")
+        self._photo_cache[asset_id] = photo
+        return photo
