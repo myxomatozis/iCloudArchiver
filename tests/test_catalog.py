@@ -177,3 +177,4 @@ def test_stream_to_file_raises_on_http_error(tmp_path: Path) -> None:
         raise AssertionError("expected RuntimeError from raise_for_status")
 
     assert response.raise_for_status_called is True
+    assert not dest.exists(), "failed download must not leave a partial file"
